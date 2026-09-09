@@ -1,0 +1,1649 @@
+-- Room Combine Power Controls
+-- by Skip Mussett / Cursor Agent
+--
+-- Display power Flip-Flops for room-combine designs. Each display exposes the
+-- same surface as a Q-SYS Flip-Flop (State / Set / Reset / Toggle / Out /
+-- Not Out) plus a Power Status LED (Input pin) for device power feedback.
+--
+-- Link Power ON:
+--   - All State controls in that room stay in sync
+--   - When the Room Combiner joins that room with others, State also syncs
+--     with every other Link Power room in the same combine group
+-- Link Power OFF: that room never sends or receives linked power updates
+--
+-- Control Counts follow Room Count x Displays Per Room (dense). Unused
+-- rooms and displays are not declared, so their schematic pins do not
+-- appear. Re-drag after changing either property.
+--
+-- Tabs use Style=None in GetControlLayout only. Do NOT page-scope IsInvisible
+-- by page_index — Designer will not restore off-page controls (blank Room tabs).
+-- Runtime IsInvisible is for unused slots / utility fields only — never tabs.
+
+PluginInfo = {
+  Name = "Room Control~Combine Power Controls",
+  Version = "1.5.0",
+  BuildVersion = "1.5.0.0",
+  Id = "c4a7e91b-2f6d-4e8a-9b1c-5d3f7a0e8c2b",
+  Author = "Skip Mussett",
+  Description = [[
+Room combiner display power controls. Setup and Room tabs with Flip-Flop
+power per display. Each display has a Power Status LED (Input pin) for
+device feedback. Link Power on: any State drives all displays in that
+room and combined rooms that also have Link Power on. Link Power off:
+displays stay independent regardless of combine state. Pins follow Room
+Count x Displays Per Room; re-drag after property or layout changes.
+  ]],
+  ShowDebug = true,
+}
+
+MAX_ROOMS = 8
+MAX_DISPLAYS_PER_ROOM = 4
+
+DEFAULT_ROOM_COUNT = 3
+DEFAULT_DISPLAYS_PER_ROOM = 2
+
+PAGE_SETUP = "Setup"
+
+function GetColor(props)
+  return { 1, 102, 255 }
+end
+
+function GetPrettyName(props)
+  return string.format(
+    "Room Combine Power Controls v%s (%d rooms x %d)",
+    PluginInfo.Version,
+    props["Room Count"].Value,
+    props["Displays Per Room"].Value
+  )
+end
+
+UI = {
+  bg = { 28, 28, 28 },
+  panel = { 40, 40, 44 },
+  card = { 52, 52, 60 },
+  cardAlt = { 64, 64, 74 },
+  stroke = { 78, 78, 88 },
+  controlStroke = { 198, 198, 206 },
+  cyan = { 27, 212, 219 },
+  headerLabel = { 27, 212, 219 },
+  text = { 255, 255, 255 },
+  muted = { 168, 168, 176 },
+  textDark = { 20, 20, 24 },
+  btnOn = { 1, 102, 255 },
+  btnOff = { 90, 90, 98 },
+  btnSelOn = { 255, 255, 255 },
+  btnSelOff = { 90, 90, 98 },
+  ledOn = { 0, 196, 120 },
+  ledOff = { 48, 48, 54 },
+  fieldGrid = { 190, 190, 198 },
+  fieldSummary = { 245, 245, 248 },
+}
+
+function clampInt(value, minVal, maxVal)
+  n = math.floor((tonumber(value) or minVal) + 0.5)
+  if n < minVal then n = minVal end
+  if n > maxVal then n = maxVal end
+  return n
+end
+
+ACTIVE_ROOM_COUNT = DEFAULT_ROOM_COUNT
+ACTIVE_DISPLAYS_PER_ROOM = DEFAULT_DISPLAYS_PER_ROOM
+
+function setActiveDimensions(roomCountIn, displaysPerRoomIn)
+  ACTIVE_ROOM_COUNT = clampInt(roomCountIn, 2, MAX_ROOMS)
+  ACTIVE_DISPLAYS_PER_ROOM = clampInt(displaysPerRoomIn, 1, MAX_DISPLAYS_PER_ROOM)
+  return activeDisplaySlotCount()
+end
+
+function applyActiveDimensions(props)
+  return setActiveDimensions(
+    propertyRoomCount(props),
+    propertyDisplaysPerRoom(props)
+  )
+end
+
+function activeDisplaySlotCount()
+  return ACTIVE_ROOM_COUNT * ACTIVE_DISPLAYS_PER_ROOM
+end
+
+setActiveDimensions(DEFAULT_ROOM_COUNT, DEFAULT_DISPLAYS_PER_ROOM)
+
+-- Dense flat index for the active Room Count x Displays Per Room slice.
+-- Room 2 Display 1 is index (Displays Per Room)+1. Re-drag after property changes.
+function displayFlatIndex(roomIdx, displayIdx)
+  if roomIdx < 1 or roomIdx > ACTIVE_ROOM_COUNT then return nil end
+  if displayIdx < 1 or displayIdx > ACTIVE_DISPLAYS_PER_ROOM then return nil end
+  return ((roomIdx - 1) * ACTIVE_DISPLAYS_PER_ROOM) + displayIdx
+end
+
+function flatRoomIndex(flatIdx)
+  return math.floor((flatIdx - 1) / ACTIVE_DISPLAYS_PER_ROOM) + 1
+end
+
+function flatDisplayIndex(flatIdx)
+  return ((flatIdx - 1) % ACTIVE_DISPLAYS_PER_ROOM) + 1
+end
+
+function isActiveDisplaySlot(roomIdx, displayIdx)
+  return roomIdx >= 1 and roomIdx <= ACTIVE_ROOM_COUNT
+    and displayIdx >= 1 and displayIdx <= ACTIVE_DISPLAYS_PER_ROOM
+end
+
+-- Pin PrettyName hierarchy:
+-- Room N~Display M~State|Set|Reset|Toggle|Not Out|Out|Power Status
+function ucDisplayName(roomIdx, displayIdx, suffix)
+  return "Room " .. roomIdx .. "~Display " .. displayIdx .. "~" .. suffix
+end
+
+function ucRoomOptionName(roomIdx, suffix)
+  return "Room " .. roomIdx .. "~" .. suffix
+end
+
+function propertyRoomCount(props)
+  if props and props["Room Count"] then
+    return clampInt(props["Room Count"].Value, 2, MAX_ROOMS)
+  end
+  return DEFAULT_ROOM_COUNT
+end
+
+function propertyDisplaysPerRoom(props)
+  if props and props["Displays Per Room"] then
+    return clampInt(props["Displays Per Room"].Value, 1, MAX_DISPLAYS_PER_ROOM)
+  end
+  return DEFAULT_DISPLAYS_PER_ROOM
+end
+
+function GetProperties()
+  props = {}
+  table.insert(props, {
+    Name = "Room Count",
+    Type = "integer",
+    Min = 2,
+    Max = MAX_ROOMS,
+    Value = DEFAULT_ROOM_COUNT,
+  })
+  table.insert(props, {
+    Name = "Displays Per Room",
+    Type = "integer",
+    Min = 1,
+    Max = MAX_DISPLAYS_PER_ROOM,
+    Value = DEFAULT_DISPLAYS_PER_ROOM,
+  })
+  return props
+end
+
+function RectifyProperties(props)
+  props["Room Count"].Value = clampInt(props["Room Count"].Value, 2, MAX_ROOMS)
+  props["Displays Per Room"].Value = clampInt(props["Displays Per Room"].Value, 1, MAX_DISPLAYS_PER_ROOM)
+  return props
+end
+
+function buildPageNameList(roomCount)
+  names = { PAGE_SETUP }
+  for roomIdx = 1, roomCount do
+    table.insert(names, "Room " .. roomIdx)
+  end
+  return names
+end
+
+function GetPages(props)
+  pages = {}
+  for _, name in ipairs(buildPageNameList(propertyRoomCount(props))) do
+    table.insert(pages, { name = name })
+  end
+  return pages
+end
+
+function pageNameFromIndex(props)
+  names = buildPageNameList(propertyRoomCount(props))
+  pageIdx = clampInt(props["page_index"].Value, 1, #names)
+  return names[pageIdx] or PAGE_SETUP
+end
+
+function roomIndexFromPageIndex(pageIdx, roomCount)
+  pageIdx = tonumber(pageIdx)
+  if pageIdx == nil then return nil end
+  roomIdx = pageIdx - 1
+  if roomIdx >= 1 and roomIdx <= roomCount then
+    return roomIdx
+  end
+  return nil
+end
+
+-- Controls -----------------------------------------------------------------
+
+function GetControls(props)
+  applyActiveDimensions(props)
+  ctrls = {}
+  -- Dense Counts: only active rooms/displays are declared (and pinned).
+  roomSlots = ACTIVE_ROOM_COUNT
+  displaySlots = activeDisplaySlotCount()
+
+  table.insert(ctrls, { Name = "status", ControlType = "Text", Count = 1, UserPin = true, PinStyle = "Output" })
+  table.insert(ctrls, { Name = "propertiesRoomCount", ControlType = "Text", Count = 1, UserPin = true, PinStyle = "Output" })
+  table.insert(ctrls, { Name = "propertiesDisplaysPerRoom", ControlType = "Text", Count = 1, UserPin = true, PinStyle = "Output" })
+
+  table.insert(ctrls, {
+    Name = "setupRoomCombiner",
+    ControlType = "Text",
+    TextBoxType = "ComboBox",
+    Count = 1,
+    UserPin = false,
+  })
+  table.insert(ctrls, { Name = "setupDefaultRC", ControlType = "Text", Count = 1, UserPin = false })
+  table.insert(ctrls, {
+    Name = "setupLinkPower",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "setupAllOn",
+    ControlType = "Button",
+    ButtonType = "Trigger",
+    Count = 1,
+    UserPin = false,
+  })
+  table.insert(ctrls, {
+    Name = "setupAllOff",
+    ControlType = "Button",
+    ButtonType = "Trigger",
+    Count = 1,
+    UserPin = false,
+  })
+
+  table.insert(ctrls, {
+    Name = "roomOptionLinkPower",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    Count = roomSlots,
+    UserPin = false,
+  })
+
+  table.insert(ctrls, {
+    Name = "displayLabel",
+    ControlType = "Text",
+    Count = displaySlots,
+    UserPin = false,
+  })
+  table.insert(ctrls, {
+    Name = "displayState",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    Count = displaySlots,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "displaySet",
+    ControlType = "Button",
+    ButtonType = "Trigger",
+    Count = displaySlots,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "displayReset",
+    ControlType = "Button",
+    ButtonType = "Trigger",
+    Count = displaySlots,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "displayToggle",
+    ControlType = "Button",
+    ButtonType = "Trigger",
+    Count = displaySlots,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "displayNotOut",
+    ControlType = "Indicator",
+    IndicatorType = "Led",
+    Count = displaySlots,
+    UserPin = true,
+    PinStyle = "Output",
+  })
+  table.insert(ctrls, {
+    Name = "displayOut",
+    ControlType = "Indicator",
+    IndicatorType = "Led",
+    Count = displaySlots,
+    UserPin = true,
+    PinStyle = "Output",
+  })
+  -- External device power feedback (wire display power-sense into this pin).
+  table.insert(ctrls, {
+    Name = "displayPowerStatus",
+    ControlType = "Indicator",
+    IndicatorType = "Led",
+    Count = displaySlots,
+    UserPin = true,
+    PinStyle = "Input",
+  })
+
+  return ctrls
+end
+
+-- Layout -------------------------------------------------------------------
+
+function GetControlLayout(props)
+  applyActiveDimensions(props)
+  layout = {}
+  graphics = {}
+  currentPage = pageNameFromIndex(props)
+  roomCount = ACTIVE_ROOM_COUNT
+  displaysPerRoom = ACTIVE_DISPLAYS_PER_ROOM
+
+  PANEL_W = 620
+  PANEL_H = 200
+  ROW_PITCH = 20
+  ROW_H = 18
+
+  function gLabel(text, x, y, w, h, bold, whiteText, fontSize, align)
+    table.insert(graphics, {
+      Type = "Label",
+      Text = text,
+      Position = { x, y },
+      Size = { w, h or 14 },
+      Color = whiteText and UI.text or UI.headerLabel,
+      Font = bold and "Montserrat" or "Roboto",
+      FontStyle = bold and "Bold" or "Regular",
+      FontSize = fontSize or (bold and 10 or 9),
+      HTextAlign = align or "Left",
+    })
+  end
+
+  function gFill(x, y, w, h, fill, strokeWidth, strokeColor, cornerRadius)
+    boxW = math.floor(w + 0.5)
+    boxH = math.floor(h + 0.5)
+    if boxW < 1 then boxW = 1 end
+    if boxH < 1 then boxH = 1 end
+    radius = cornerRadius or 0
+    maxRadius = math.floor(math.min(boxW, boxH) / 2)
+    if radius > maxRadius then radius = maxRadius end
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Text = "",
+      Font = "Roboto",
+      FontStyle = "Regular",
+      FontSize = 12,
+      Fill = fill,
+      StrokeWidth = strokeWidth or 0,
+      StrokeColor = strokeColor or fill,
+      CornerRadius = radius,
+      Position = { x, y },
+      Size = { boxW, boxH },
+    })
+  end
+
+  function gPageTitle(text)
+    gLabel(text, 16, 8, PANEL_W - 32, 28, true, true, 24)
+  end
+
+  function gRule(x, y, w)
+    gFill(x, y, w, 1, UI.cyan, 0, nil, 0)
+  end
+
+  function gPanelBackground()
+    gFill(0, 0, PANEL_W, PANEL_H, UI.bg, 0, nil, 0)
+  end
+
+  function toggleLayout(x, y, w, h, legend)
+    return {
+      Style = "Button",
+      ButtonStyle = "Toggle",
+      ButtonVisualStyle = "Flat",
+      Position = { x, y },
+      Size = { w, h },
+      CornerRadius = 6,
+      Color = UI.btnOn,
+      OffColor = UI.btnOff,
+      UnlinkOffColor = true,
+      StrokeWidth = 1,
+      StrokeColor = UI.controlStroke,
+      Legend = legend,
+      FontSize = 9,
+      Font = "Roboto",
+      FontStyle = "Regular",
+    }
+  end
+
+  function triggerLayout(x, y, w, h, legend)
+    return {
+      Style = "Button",
+      ButtonStyle = "Trigger",
+      ButtonVisualStyle = "Flat",
+      Position = { x, y },
+      Size = { w, h },
+      CornerRadius = 6,
+      Color = UI.btnOff,
+      StrokeWidth = 1,
+      StrokeColor = UI.controlStroke,
+      Legend = legend,
+      FontSize = 9,
+      Font = "Roboto",
+      FontStyle = "Regular",
+    }
+  end
+
+  function comboLayout(x, y, w, h)
+    return {
+      Style = "ComboBox",
+      Position = { x, y },
+      Size = { w, h },
+      CornerRadius = 4,
+      Color = UI.fieldSummary,
+      StrokeWidth = 1,
+      StrokeColor = UI.controlStroke,
+      TextColor = UI.textDark,
+      FontSize = 10,
+    }
+  end
+
+  function fieldLayout(x, y, w, h, fill, readOnly)
+    return {
+      Style = "Text",
+      IsReadOnly = readOnly and true or false,
+      Position = { x, y },
+      Size = { w, h },
+      CornerRadius = 4,
+      Color = fill,
+      StrokeWidth = 1,
+      StrokeColor = UI.controlStroke,
+      TextColor = UI.textDark,
+      FontSize = 9,
+      HTextAlign = "Left",
+    }
+  end
+
+  function ledLayout(x, y, w, h)
+    return {
+      Style = "Led",
+      Position = { x, y },
+      Size = { w, h },
+      Color = UI.ledOn,
+      OffColor = UI.ledOff,
+      UnlinkOffColor = true,
+    }
+  end
+
+  -- Everything starts hidden; the active page re-declares what it shows.
+  -- Stub only the declared (active) control set so unused rooms have no pins.
+  layout["status"] = { PrettyName = "Status~Debug", Style = "None" }
+  layout["propertiesRoomCount"] = { PrettyName = "Properties~Room Count", Style = "None" }
+  layout["propertiesDisplaysPerRoom"] = { PrettyName = "Properties~Displays Per Room", Style = "None" }
+  layout["setupRoomCombiner"] = { PrettyName = "setupRoomCombiner", Style = "None" }
+  layout["setupDefaultRC"] = { PrettyName = "setupDefaultRC", Style = "None" }
+  layout["setupLinkPower"] = { PrettyName = "Setup~Link Power", Style = "None" }
+  layout["setupAllOn"] = { PrettyName = "setupAllOn", Style = "None" }
+  layout["setupAllOff"] = { PrettyName = "setupAllOff", Style = "None" }
+
+  for roomIdx = 1, roomCount do
+    layout["roomOptionLinkPower " .. roomIdx] = {
+      PrettyName = ucRoomOptionName(roomIdx, "Link Power"),
+      Style = "None",
+    }
+    for displayIdx = 1, displaysPerRoom do
+      flatIdx = displayFlatIndex(roomIdx, displayIdx)
+      layout["displayLabel " .. flatIdx] = { PrettyName = ucDisplayName(roomIdx, displayIdx, "Label"), Style = "None" }
+      layout["displayState " .. flatIdx] = { PrettyName = ucDisplayName(roomIdx, displayIdx, "State"), Style = "None" }
+      layout["displaySet " .. flatIdx] = { PrettyName = ucDisplayName(roomIdx, displayIdx, "Set"), Style = "None" }
+      layout["displayReset " .. flatIdx] = { PrettyName = ucDisplayName(roomIdx, displayIdx, "Reset"), Style = "None" }
+      layout["displayToggle " .. flatIdx] = { PrettyName = ucDisplayName(roomIdx, displayIdx, "Toggle"), Style = "None" }
+      layout["displayNotOut " .. flatIdx] = { PrettyName = ucDisplayName(roomIdx, displayIdx, "Not Out"), Style = "None" }
+      layout["displayOut " .. flatIdx] = { PrettyName = ucDisplayName(roomIdx, displayIdx, "Out"), Style = "None" }
+      layout["displayPowerStatus " .. flatIdx] = {
+        PrettyName = ucDisplayName(roomIdx, displayIdx, "Power Status"),
+        Style = "None",
+      }
+    end
+  end
+
+  -- Setup page --------------------------------------------------------------
+  -- Fixed 620x200. Same column pattern as Video Routing Setup.
+
+  function drawSetupPage()
+    pad = 16
+    lblX = 24
+    lblW = 130
+    ctrlX = 168
+    comboW = 200
+    btnW = 90
+    btnH = 22
+    descX = ctrlX + btnW + 12
+    descW = PANEL_W - descX - pad
+    combinerY = 56
+    combinerDescX = ctrlX + comboW + 12
+    combinerDescW = PANEL_W - combinerDescX - pad
+    optRow1Y = 100
+    optRow2Y = 148
+    allOffX = ctrlX + btnW + 8
+    allDescX = allOffX + btnW + 12
+    allDescW = PANEL_W - allDescX - pad
+
+    gPanelBackground()
+    gPageTitle(PAGE_SETUP)
+    gRule(pad, 44, PANEL_W - (pad * 2))
+
+    gLabel("Room Combiner", lblX, combinerY + 4, lblW, 14, false, false)
+    layout["setupRoomCombiner"] = comboLayout(ctrlX, combinerY, comboW, btnH)
+    layout["setupRoomCombiner"].PrettyName = "setupRoomCombiner"
+    gLabel("choose which room combiner", combinerDescX, combinerY + 4, combinerDescW, 14, false, false)
+
+    gLabel("System Options", lblX, optRow1Y + 4, lblW, 14, true, false)
+
+    layout["setupLinkPower"] = toggleLayout(ctrlX, optRow1Y, btnW, btnH, "Link Power")
+    layout["setupLinkPower"].PrettyName = "Setup~Link Power"
+    gLabel("sets Link Power on every room tab", descX, optRow1Y + 4, descW, 16, false, false)
+
+    layout["setupAllOn"] = triggerLayout(ctrlX, optRow2Y, btnW, btnH, "All On")
+    layout["setupAllOn"].PrettyName = "setupAllOn"
+    layout["setupAllOff"] = triggerLayout(allOffX, optRow2Y, btnW, btnH, "All Off")
+    layout["setupAllOff"].PrettyName = "setupAllOff"
+    gLabel("turns every active display On or Off", allDescX, optRow2Y + 4, allDescW, 16, false, false)
+  end
+
+  -- Room page ---------------------------------------------------------------
+  -- Fixed 620x200. Same Setup column pattern for Link Power, then display grid.
+
+  function drawRoomPage(roomIdx)
+    pad = 16
+    lblX = 24
+    lblW = 130
+    ctrlX = 168
+    btnW = 90
+    btnH = 22
+    descX = ctrlX + btnW + 12
+    descW = PANEL_W - descX - pad
+    linkY = 56
+    headerY = 92
+    rowStartY = 108
+
+    stateW = 88
+    trigW = 64
+    ledW = 20
+    gap = 10
+    stateX = lblX
+    setX = stateX + stateW + gap
+    resetX = setX + trigW + gap
+    toggleX = resetX + trigW + gap
+    outX = toggleX + trigW + gap
+    notX = outX + ledW + gap
+    statusX = notX + ledW + gap
+
+    gPanelBackground()
+    gPageTitle("Room " .. roomIdx)
+    gRule(pad, 44, PANEL_W - (pad * 2))
+
+    gLabel("Room Options", lblX, linkY + 4, lblW, 14, true, false)
+    layout["roomOptionLinkPower " .. roomIdx] = toggleLayout(ctrlX, linkY, btnW, btnH, "Link Power")
+    layout["roomOptionLinkPower " .. roomIdx].PrettyName = ucRoomOptionName(roomIdx, "Link Power")
+    gLabel(
+      "any State sets all displays here and in combined Link Power rooms",
+      descX, linkY + 4, descW, 16, false, false
+    )
+
+    gLabel("State", stateX, headerY, stateW, 12, true, false)
+    gLabel("Set", setX, headerY, trigW, 12, true, false)
+    gLabel("Reset", resetX, headerY, trigW, 12, true, false)
+    gLabel("Toggle", toggleX, headerY, trigW, 12, true, false)
+    gLabel("Out", outX, headerY, ledW + 8, 12, true, false)
+    gLabel("Not", notX, headerY, ledW + 12, 12, true, false)
+    gLabel("Status", statusX, headerY, ledW + 28, 12, true, false)
+
+    for displayIdx = 1, displaysPerRoom do
+      flatIdx = displayFlatIndex(roomIdx, displayIdx)
+      rowY = rowStartY + ((displayIdx - 1) * ROW_PITCH)
+
+      -- displayLabel stays Style=None (declared above); not shown on room tabs.
+      layout["displayState " .. flatIdx] = toggleLayout(stateX, rowY, stateW, ROW_H, "Power")
+      layout["displayState " .. flatIdx].PrettyName = ucDisplayName(roomIdx, displayIdx, "State")
+
+      layout["displaySet " .. flatIdx] = triggerLayout(setX, rowY, trigW, ROW_H, "Set")
+      layout["displaySet " .. flatIdx].PrettyName = ucDisplayName(roomIdx, displayIdx, "Set")
+
+      layout["displayReset " .. flatIdx] = triggerLayout(resetX, rowY, trigW, ROW_H, "Reset")
+      layout["displayReset " .. flatIdx].PrettyName = ucDisplayName(roomIdx, displayIdx, "Reset")
+
+      layout["displayToggle " .. flatIdx] = triggerLayout(toggleX, rowY, trigW, ROW_H, "Toggle")
+      layout["displayToggle " .. flatIdx].PrettyName = ucDisplayName(roomIdx, displayIdx, "Toggle")
+
+      layout["displayNotOut " .. flatIdx] = ledLayout(notX, rowY + 1, ledW, ledW)
+      layout["displayNotOut " .. flatIdx].PrettyName = ucDisplayName(roomIdx, displayIdx, "Not Out")
+      layout["displayNotOut " .. flatIdx].Color = { 255, 45, 85 }
+
+      layout["displayOut " .. flatIdx] = ledLayout(outX, rowY + 1, ledW, ledW)
+      layout["displayOut " .. flatIdx].PrettyName = ucDisplayName(roomIdx, displayIdx, "Out")
+
+      -- Input-pin LED: driven by schematic power-sense feedback, not Flip-Flop.
+      layout["displayPowerStatus " .. flatIdx] = ledLayout(statusX, rowY + 1, ledW, ledW)
+      layout["displayPowerStatus " .. flatIdx].PrettyName = ucDisplayName(roomIdx, displayIdx, "Power Status")
+      layout["displayPowerStatus " .. flatIdx].Color = { 0, 220, 90 }
+    end
+  end
+
+  if currentPage == PAGE_SETUP then
+    drawSetupPage()
+  else
+    roomNum = tonumber(string.match(currentPage, "Room (%d+)"))
+    if roomNum and roomNum >= 1 and roomNum <= roomCount then
+      drawRoomPage(roomNum)
+    else
+      drawSetupPage()
+    end
+  end
+
+  return layout, graphics
+end
+
+
+-- Runtime ------------------------------------------------------------------
+
+if Controls then
+  json = nil
+  okJson, jsonMod = pcall(require, "rapidjson")
+  if okJson and jsonMod then
+    json = jsonMod
+  else
+    okJson, jsonMod = pcall(require, "json")
+    if okJson and jsonMod then
+      json = jsonMod
+    end
+  end
+
+  applyActiveDimensions(Properties)
+
+  status = Controls.status
+  setupRoomCombiner = Controls.setupRoomCombiner
+  setupDefaultRC = Controls.setupDefaultRC
+  setupLinkPower = Controls.setupLinkPower
+
+  roomCombiners = {}
+  configControl = nil
+  wallOpenControls = {}
+  wallConfigControls = {}
+  lastGroupSource = "default"
+  lastCombinerFingerprint = ""
+  combinerDirty = false
+  isUpdating = false
+  updateDepth = 0
+  bootComplete = false
+  cacheGroupSetMap = nil
+  configPollTimer = Timer.New()
+  pagePollTimer = Timer.New()
+  activePageIdx = Properties["page_index"].Value
+
+  function resetUpdateGate()
+    updateDepth = 0
+    isUpdating = false
+  end
+
+  function suppressing(fn)
+    updateDepth = updateDepth + 1
+    isUpdating = true
+    okSup, errSup = pcall(fn)
+    updateDepth = updateDepth - 1
+    if updateDepth <= 0 then
+      resetUpdateGate()
+    else
+      isUpdating = true
+    end
+    if not okSup then
+      error(errSup)
+    end
+  end
+
+  function runHandler(label, fn)
+    if isUpdating or not bootComplete then return end
+    okH, errH = pcall(fn)
+    resetUpdateGate()
+    if not okH then
+      reportScriptError(label, errH)
+    end
+  end
+
+  function invalidateCaches()
+    cacheGroupSetMap = nil
+  end
+
+  function reportScriptError(prefix, err)
+    msg = prefix .. ": " .. tostring(err)
+    print("Room Combine Power Controls " .. msg)
+    if status then
+      status.String = msg
+    end
+  end
+
+  function trimString(text)
+    if text == nil then return "" end
+    return (string.match(text, "^%s*(.-)%s*$"))
+  end
+
+  function refreshActiveDimensions()
+    return applyActiveDimensions(Properties)
+  end
+
+  function getRoomCount()
+    return ACTIVE_ROOM_COUNT
+  end
+
+  function getDisplaysPerRoom()
+    return ACTIVE_DISPLAYS_PER_ROOM
+  end
+
+  function setControlInvisible(ctl, hide)
+    if not ctl then return end
+    want = hide and true or false
+    if ctl.IsInvisible == want then return end
+    ctl.IsInvisible = want
+  end
+
+  -- page_index: 1=Setup, 2=Room 1, ... N+1=Room N
+  function viewedRoomIdx()
+    pageIdx = nil
+    if Properties and Properties["page_index"] then
+      pageIdx = Properties["page_index"].Value
+    end
+    if pageIdx == nil then pageIdx = activePageIdx end
+    return roomIndexFromPageIndex(pageIdx, getRoomCount())
+  end
+
+  function syncPropertyPins()
+    if Controls.propertiesRoomCount then
+      Controls.propertiesRoomCount.String = tostring(getRoomCount())
+    end
+    if Controls.propertiesDisplaysPerRoom then
+      Controls.propertiesDisplaysPerRoom.String = tostring(getDisplaysPerRoom())
+    end
+  end
+
+  function defaultDisplayLabel(roomIdx, displayIdx)
+    return "Display " .. displayIdx
+  end
+
+  function isActiveDisplay(roomIdx, displayIdx)
+    return isActiveDisplaySlot(roomIdx, displayIdx)
+  end
+
+  -- Control reference tables (built once at bind time). Avoids global index
+  -- collisions while EventHandlers and link propagation are running.
+  linkPowerCtrls = {}
+  stateCtrls = {}
+  setCtrls = {}
+  resetCtrls = {}
+  toggleCtrls = {}
+  outCtrls = {}
+  notOutCtrls = {}
+  linkingBusy = false
+
+  function cacheControlRefs()
+    linkPowerCtrls = {}
+    stateCtrls = {}
+    setCtrls = {}
+    resetCtrls = {}
+    toggleCtrls = {}
+    outCtrls = {}
+    notOutCtrls = {}
+    for roomIdx = 1, getRoomCount() do
+      linkPowerCtrls[roomIdx] = Controls.roomOptionLinkPower[roomIdx]
+      stateCtrls[roomIdx] = {}
+      setCtrls[roomIdx] = {}
+      resetCtrls[roomIdx] = {}
+      toggleCtrls[roomIdx] = {}
+      outCtrls[roomIdx] = {}
+      notOutCtrls[roomIdx] = {}
+      for displayIdx = 1, getDisplaysPerRoom() do
+        flatIdx = displayFlatIndex(roomIdx, displayIdx)
+        if flatIdx then
+          stateCtrls[roomIdx][displayIdx] = Controls.displayState[flatIdx]
+          setCtrls[roomIdx][displayIdx] = Controls.displaySet[flatIdx]
+          resetCtrls[roomIdx][displayIdx] = Controls.displayReset[flatIdx]
+          toggleCtrls[roomIdx][displayIdx] = Controls.displayToggle[flatIdx]
+          outCtrls[roomIdx][displayIdx] = Controls.displayOut[flatIdx]
+          notOutCtrls[roomIdx][displayIdx] = Controls.displayNotOut[flatIdx]
+        end
+      end
+    end
+  end
+
+  -- Flip-Flop + Link Power --------------------------------------------------
+  -- Link Power ON:
+  --   1) All State controls in that room stay in sync
+  --   2) Combined rooms that also have Link Power ON stay in sync
+  -- Link Power OFF: room never sends or receives linked power updates
+
+  function applyLedPair(roomIdx, displayIdx, state)
+    onState = state and true or false
+    outCtl = outCtrls[roomIdx] and outCtrls[roomIdx][displayIdx]
+    notCtl = notOutCtrls[roomIdx] and notOutCtrls[roomIdx][displayIdx]
+    if outCtl then
+      outCtl.Boolean = onState
+      outCtl.Value = onState and 1 or 0
+    end
+    if notCtl then
+      notCtl.Boolean = not onState
+      notCtl.Value = onState and 0 or 1
+    end
+  end
+
+  function isRoomLinkPowerEnabled(roomIdx)
+    ctl = linkPowerCtrls[roomIdx]
+    if ctl == nil then
+      ctl = Controls.roomOptionLinkPower[roomIdx]
+      linkPowerCtrls[roomIdx] = ctl
+    end
+    return ctl ~= nil and ctl.Boolean == true
+  end
+
+  function writeDisplayState(roomIdx, displayIdx, state)
+    stateCtl = stateCtrls[roomIdx] and stateCtrls[roomIdx][displayIdx]
+    if stateCtl == nil then
+      flatIdx = displayFlatIndex(roomIdx, displayIdx)
+      stateCtl = flatIdx and Controls.displayState[flatIdx] or nil
+      if stateCtrls[roomIdx] == nil then stateCtrls[roomIdx] = {} end
+      stateCtrls[roomIdx][displayIdx] = stateCtl
+    end
+    if stateCtl == nil then return end
+    onState = state and true or false
+    stateCtl.Boolean = onState
+    stateCtl.Value = onState and 1 or 0
+    applyLedPair(roomIdx, displayIdx, onState)
+  end
+
+  function getDisplayState(roomIdx, displayIdx)
+    stateCtl = stateCtrls[roomIdx] and stateCtrls[roomIdx][displayIdx]
+    if stateCtl == nil then return false end
+    return stateCtl.Boolean == true
+  end
+
+  -- Core link behavior. Uses local loop vars so nested calls cannot corrupt
+  -- the peer walk (Q-SYS scripts share globals by default).
+  function propagateLinkPowerState(srcRoomIdx, srcDisplayIdx, state)
+    if not bootComplete then return end
+    if linkingBusy then return end
+    if not isRoomLinkPowerEnabled(srcRoomIdx) then return end
+
+    linkingBusy = true
+    onState = state and true or false
+    okProp, errProp = pcall(function()
+      invalidateCaches()
+
+      -- 1) Always link every display inside this Link Power room.
+      for dIdx = 1, getDisplaysPerRoom() do
+        if dIdx ~= srcDisplayIdx then
+          writeDisplayState(srcRoomIdx, dIdx, onState)
+        else
+          applyLedPair(srcRoomIdx, dIdx, onState)
+        end
+      end
+
+      -- 2) Link every display in combined rooms that also have Link Power on.
+      combineList = getCombineGroupRooms(srcRoomIdx)
+      for cIdx = 1, #combineList do
+        peerIdx = combineList[cIdx]
+        if peerIdx ~= srcRoomIdx and isRoomLinkPowerEnabled(peerIdx) then
+          for dIdx = 1, getDisplaysPerRoom() do
+            writeDisplayState(peerIdx, dIdx, onState)
+          end
+        end
+      end
+    end)
+    linkingBusy = false
+
+    if not okProp then
+      reportScriptError("LinkPower", errProp)
+    else
+      print(string.format(
+        "LinkPower room=%d disp=%d state=%s source=%s peers=%s groups=%s",
+        srcRoomIdx,
+        srcDisplayIdx,
+        tostring(onState),
+        lastGroupSource,
+        table.concat(combineList, "+"),
+        formatGroupsCompact(getActiveGroups())
+      ))
+    end
+  end
+
+  function setDisplayState(roomIdx, displayIdx, state, fanLink)
+    writeDisplayState(roomIdx, displayIdx, state)
+    if fanLink then
+      propagateLinkPowerState(roomIdx, displayIdx, state and true or false)
+    end
+  end
+
+  function syncLinkedGroupsFromLeaders()
+    if not bootComplete then return end
+    if linkingBusy then return end
+    invalidateCaches()
+    activeGroups = getActiveGroups()
+    for gIdx = 1, #activeGroups do
+      group = activeGroups[gIdx]
+      linkedList = {}
+      if type(group) == "table" then
+        for rIdx = 1, #group do
+          roomIdx = group[rIdx]
+          if isRoomLinkPowerEnabled(roomIdx) then
+            table.insert(linkedList, roomIdx)
+          end
+        end
+      end
+      leader = linkedList[1]
+      if leader then
+        leaderState = getDisplayState(leader, 1)
+        for rIdx = 1, #linkedList do
+          roomIdx = linkedList[rIdx]
+          for dIdx = 1, getDisplaysPerRoom() do
+            writeDisplayState(roomIdx, dIdx, leaderState)
+          end
+        end
+      end
+    end
+  end
+
+  function applySetupLinkPowerMaster(enabled)
+    for roomIdx = 1, getRoomCount() do
+      ctl = linkPowerCtrls[roomIdx] or Controls.roomOptionLinkPower[roomIdx]
+      if ctl then
+        ctl.Boolean = enabled and true or false
+        ctl.Value = enabled and 1 or 0
+      end
+    end
+  end
+
+  -- Room combiner -----------------------------------------------------------
+
+  function tryGetNamedControl(comp, name)
+    if not comp or not name then return nil end
+    success, control = pcall(function() return comp[name] end)
+    if success and control ~= nil then return control end
+    return nil
+  end
+
+  function scanRoomCombiners()
+    roomCombiners = {}
+    comps = Component.GetComponents() or {}
+    for _, comp in ipairs(comps) do
+      if comp.Type == "room_combiner" and comp.Name and comp.Name ~= "" then
+        table.insert(roomCombiners, comp.Name)
+      end
+    end
+    if setupRoomCombiner then
+      setupRoomCombiner.Choices = roomCombiners
+    end
+  end
+
+  function findConfigurationControl(comp)
+    names = {
+      "room.combiner.output.configuration",
+      "rooms.output.configuration",
+      "output.configuration",
+      "configuration",
+      "Configuration",
+    }
+    for _, name in ipairs(names) do
+      control = tryGetNamedControl(comp, name)
+      if control then return control end
+    end
+    return nil
+  end
+
+  function findWallOpenControl(comp, wallIdx)
+    return tryGetNamedControl(comp, "wall." .. wallIdx .. ".open")
+      or tryGetNamedControl(comp, "Wall " .. wallIdx .. " Open")
+  end
+
+  function findWallConfigControl(comp, wallIdx)
+    return tryGetNamedControl(comp, "wall." .. wallIdx .. ".rooms")
+      or tryGetNamedControl(comp, "wall." .. wallIdx .. ".configure")
+      or tryGetNamedControl(comp, "Wall " .. wallIdx .. " Configure")
+      or tryGetNamedControl(comp, "Wall " .. wallIdx .. " Rooms")
+  end
+
+  function getConfigControlString()
+    if not configControl then return "" end
+    raw = trimString(configControl.String)
+    if raw ~= "" then return raw end
+    return trimString(tostring(configControl.Value or ""))
+  end
+
+  function combinerFingerprint()
+    fpParts = {}
+    table.insert(fpParts, "c:" .. getConfigControlString())
+    for idx, openCtl in ipairs(wallOpenControls) do
+      openBit = "0"
+      if openCtl and openCtl.Boolean then openBit = "1" end
+      cfgStr = ""
+      if wallConfigControls[idx] then
+        cfgStr = tostring(wallConfigControls[idx].String or "")
+      end
+      table.insert(fpParts, "w" .. idx .. ":" .. openBit .. ":" .. cfgStr)
+    end
+    return table.concat(fpParts, "|")
+  end
+
+  function markCombinerDirty()
+    combinerDirty = true
+  end
+
+  function onRoomCombinationChanged()
+    markCombinerDirty()
+    if not bootComplete then return end
+    invalidateCaches()
+    syncLinkedGroupsFromLeaders()
+    lastCombinerFingerprint = combinerFingerprint()
+    combinerDirty = false
+    updateStatus()
+  end
+
+  function pollCombinerChanges()
+    if not bootComplete then return end
+    fp = combinerFingerprint()
+    if combinerDirty or fp ~= lastCombinerFingerprint then
+      onRoomCombinationChanged()
+    end
+  end
+
+  function discoverCombinerControls(comp)
+    wallOpenControls = {}
+    wallConfigControls = {}
+    if not comp then return end
+    for wallIdx = 1, 64 do
+      openCtl = findWallOpenControl(comp, wallIdx)
+      cfgCtl = findWallConfigControl(comp, wallIdx)
+      if openCtl or cfgCtl then
+        table.insert(wallOpenControls, openCtl)
+        table.insert(wallConfigControls, cfgCtl)
+      elseif wallIdx > 1 then
+        break
+      end
+    end
+    for idx, openCtl in ipairs(wallOpenControls) do
+      if openCtl then
+        openCtl.EventHandler = onRoomCombinationChanged
+      end
+      if wallConfigControls[idx] then
+        wallConfigControls[idx].EventHandler = onRoomCombinationChanged
+      end
+    end
+  end
+
+  function combinerIsValid(compName)
+    if not compName or compName == "" or compName == "None Selected" then return false end
+    for idx = 1, #roomCombiners do
+      if compName == roomCombiners[idx] then return true end
+    end
+    return false
+  end
+
+  function setRoomCombiner(compName)
+    scanRoomCombiners()
+    configControl = nil
+    wallOpenControls = {}
+    wallConfigControls = {}
+    lastCombinerFingerprint = ""
+    combinerDirty = true
+    if combinerIsValid(compName) then
+      success, comp = pcall(Component.New, compName)
+      if success and comp then
+        configControl = findConfigurationControl(comp)
+        if configControl then
+          configControl.EventHandler = onRoomCombinationChanged
+        end
+        discoverCombinerControls(comp)
+        setupDefaultRC.String = compName
+        setupRoomCombiner.String = compName
+        print("Room Combine Power Controls: bound combiner " .. compName
+          .. " walls=" .. tostring(#wallOpenControls)
+          .. " config=" .. tostring(configControl ~= nil))
+      end
+    else
+      setupDefaultRC.String = "None Selected"
+    end
+    if bootComplete then
+      onRoomCombinationChanged()
+    end
+  end
+
+  -- Combine groups ----------------------------------------------------------
+
+  function buildDefaultGroups()
+    defaultGroups = {}
+    for roomIdx = 1, getRoomCount() do
+      table.insert(defaultGroups, { roomIdx })
+    end
+    return defaultGroups
+  end
+
+  function parseRoomsExpression(expr)
+    result = {}
+    exclude = {}
+    includeAll = false
+    activeRooms = getRoomCount()
+    expr = string.gsub(tostring(expr or ""), "[+,]", " ")
+    for token in string.gmatch(expr, "%S+") do
+      if token == "*" then
+        includeAll = true
+      elseif string.sub(token, 1, 1) == "!" or string.sub(token, 1, 1) == "~" then
+        num = tonumber(string.sub(token, 2))
+        if num then exclude[num] = true end
+      else
+        a, b = string.match(token, "^(%d+)[%>%-](%d+)$")
+        if a then
+          for i = tonumber(a), tonumber(b) do table.insert(result, i) end
+        else
+          num = tonumber(token)
+          if num then table.insert(result, num) end
+        end
+      end
+    end
+    filtered = {}
+    if includeAll then
+      for i = 1, activeRooms do
+        if not exclude[i] then table.insert(filtered, i) end
+      end
+    else
+      for _, r in ipairs(result) do
+        if not exclude[r] and r >= 1 and r <= activeRooms then
+          table.insert(filtered, r)
+        end
+      end
+    end
+    return filtered
+  end
+
+  function normalizeDecodedGroups(decoded)
+    if type(decoded) ~= "table" then return nil end
+    if type(decoded.groups) == "table" then decoded = decoded.groups end
+    if type(decoded.Groups) == "table" then decoded = decoded.Groups end
+    if type(decoded.rooms) == "table" and type(decoded.rooms[1]) == "table" then
+      decoded = decoded.rooms
+    end
+
+    activeRooms = getRoomCount()
+    rawGroups = {}
+    minSeen = nil
+    for _, group in ipairs(decoded) do
+      if type(group) == "table" then
+        raw = {}
+        for _, roomIdx in ipairs(group) do
+          rIdx = tonumber(roomIdx)
+          if rIdx then
+            rIdx = math.floor(rIdx)
+            table.insert(raw, rIdx)
+            if minSeen == nil or rIdx < minSeen then minSeen = rIdx end
+          end
+        end
+        if #raw > 0 then table.insert(rawGroups, raw) end
+      end
+    end
+    if #rawGroups == 0 then return nil end
+
+    -- Some firmware emits 0-based room indexes.
+    zeroBased = (minSeen == 0)
+    normalizedGroups = {}
+    for _, raw in ipairs(rawGroups) do
+      normalized = {}
+      for _, rIdx in ipairs(raw) do
+        adj = zeroBased and (rIdx + 1) or rIdx
+        if adj >= 1 and adj <= activeRooms then
+          table.insert(normalized, adj)
+        end
+      end
+      if #normalized > 0 then table.insert(normalizedGroups, normalized) end
+    end
+    if #normalizedGroups == 0 then return nil end
+    return normalizedGroups
+  end
+
+  function decodeJsonGroups(rawJsonString)
+    if not json or not json.decode then return nil end
+    rawJsonString = trimString(rawJsonString)
+    if rawJsonString == "" then return nil end
+    success, decoded = pcall(json.decode, rawJsonString)
+    if not success then return nil end
+    return normalizeDecodedGroups(decoded)
+  end
+
+  function anyWallOpen()
+    for _, openCtl in ipairs(wallOpenControls) do
+      if openCtl and openCtl.Boolean then return true end
+    end
+    return false
+  end
+
+  function groupsHaveMultiRoom(groups)
+    if type(groups) ~= "table" then return false end
+    for _, group in ipairs(groups) do
+      if type(group) == "table" and #group > 1 then return true end
+    end
+    return false
+  end
+
+  -- Wall Configure String holds room numbers ("1 2"). Value is only the first
+  -- room number, so never treat Value alone as the full room list.
+  function getWallRoomsList(cfg)
+    expr = ""
+    if cfg then
+      expr = trimString(cfg.String)
+    end
+    return parseRoomsExpression(expr)
+  end
+
+  function buildGroupsFromOpenWalls()
+    activeRooms = getRoomCount()
+    parent = {}
+    for i = 1, activeRooms do parent[i] = i end
+    function rcvrFindRoot(x)
+      while parent[x] ~= x do
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+      end
+      return x
+    end
+    function rcvrUnite(a, b)
+      ra = rcvrFindRoot(a)
+      rb = rcvrFindRoot(b)
+      if ra ~= rb then parent[rb] = ra end
+    end
+    for idx, openCtl in ipairs(wallOpenControls) do
+      if openCtl and openCtl.Boolean then
+        wallRooms = getWallRoomsList(wallConfigControls[idx])
+        for i = 2, #wallRooms do rcvrUnite(wallRooms[1], wallRooms[i]) end
+      end
+    end
+    buckets = {}
+    order = {}
+    for i = 1, activeRooms do
+      root = rcvrFindRoot(i)
+      if not buckets[root] then
+        buckets[root] = {}
+        table.insert(order, root)
+      end
+      table.insert(buckets[root], i)
+    end
+    wallGroups = {}
+    for _, root in ipairs(order) do table.insert(wallGroups, buckets[root]) end
+    return wallGroups
+  end
+
+  -- Prefer the combiner's resolved JSON (same as Video Routing). Fall back to
+  -- open-wall topology when JSON is missing or still all singletons.
+  function getActiveGroups()
+    jsonGroups = nil
+    if configControl then
+      jsonGroups = decodeJsonGroups(getConfigControlString())
+    end
+    wallGroups = nil
+    if #wallOpenControls > 0 then
+      wallGroups = buildGroupsFromOpenWalls()
+    end
+
+    if groupsHaveMultiRoom(jsonGroups) then
+      lastGroupSource = "json"
+      return jsonGroups
+    end
+    if groupsHaveMultiRoom(wallGroups) then
+      lastGroupSource = "walls"
+      return wallGroups
+    end
+    if jsonGroups then
+      lastGroupSource = "json"
+      return jsonGroups
+    end
+    if wallGroups then
+      lastGroupSource = anyWallOpen() and "walls" or "walls-closed"
+      return wallGroups
+    end
+    lastGroupSource = "default"
+    return buildDefaultGroups()
+  end
+
+  function formatGroupsCompact(groups)
+    if type(groups) ~= "table" then return "-" end
+    parts = {}
+    for _, group in ipairs(groups) do
+      if type(group) == "table" and #group > 0 then
+        table.insert(parts, table.concat(group, "+"))
+      end
+    end
+    if #parts == 0 then return "-" end
+    return table.concat(parts, ",")
+  end
+
+  function groupsToSetMap(activeGroups)
+    setMap = {}
+    for _, group in ipairs(activeGroups) do
+      if type(group) == "table" then
+        groupSet = {}
+        for _, roomIdx in ipairs(group) do
+          rIdx = tonumber(roomIdx)
+          if rIdx then groupSet[rIdx] = true end
+        end
+        for _, roomIdx in ipairs(group) do
+          rIdx = tonumber(roomIdx)
+          if rIdx then setMap[rIdx] = groupSet end
+        end
+      end
+    end
+    for roomIdx = 1, getRoomCount() do
+      if not setMap[roomIdx] then setMap[roomIdx] = { [roomIdx] = true } end
+    end
+    return setMap
+  end
+
+  function getGroupSetMap()
+    if cacheGroupSetMap == nil then
+      cacheGroupSetMap = groupsToSetMap(getActiveGroups())
+    end
+    return cacheGroupSetMap
+  end
+
+  function getCombineGroupRooms(roomIdx)
+    setMap = getGroupSetMap()
+    group = setMap[roomIdx] or { [roomIdx] = true }
+    combineList = { roomIdx }
+    for srcRoom = 1, getRoomCount() do
+      if group[srcRoom] and srcRoom ~= roomIdx then
+        table.insert(combineList, srcRoom)
+      end
+    end
+    return combineList
+  end
+
+  -- Visibility --------------------------------------------------------------
+  -- Style=None in GetControlLayout keeps off-page controls out of the layout.
+  -- Runtime must NOT page-scope IsInvisible (blanked Room tabs in 1.2.3).
+  -- Unused rooms/displays are omitted from GetControls (no pins). Hide only
+  -- utility fields here. Never call this on every page change.
+
+  function applyDisplayVisibility()
+    setControlInvisible(setupRoomCombiner, false)
+    setControlInvisible(setupLinkPower, false)
+    setControlInvisible(Controls.setupAllOn, false)
+    setControlInvisible(Controls.setupAllOff, false)
+    setControlInvisible(setupDefaultRC, true)
+    setControlInvisible(status, true)
+    setControlInvisible(Controls.propertiesRoomCount, true)
+    setControlInvisible(Controls.propertiesDisplaysPerRoom, true)
+
+    for roomIdx = 1, getRoomCount() do
+      setControlInvisible(Controls.roomOptionLinkPower[roomIdx], false)
+      for displayIdx = 1, getDisplaysPerRoom() do
+        flatIdx = displayFlatIndex(roomIdx, displayIdx)
+        if flatIdx then
+          setControlInvisible(Controls.displayLabel[flatIdx], true)
+          setControlInvisible(Controls.displayState[flatIdx], false)
+          setControlInvisible(Controls.displaySet[flatIdx], false)
+          setControlInvisible(Controls.displayReset[flatIdx], false)
+          setControlInvisible(Controls.displayToggle[flatIdx], false)
+          setControlInvisible(Controls.displayOut[flatIdx], false)
+          setControlInvisible(Controls.displayNotOut[flatIdx], false)
+          setControlInvisible(Controls.displayPowerStatus[flatIdx], false)
+        end
+      end
+    end
+  end
+
+  function seedDisplayLabels()
+    suppressing(function()
+      for roomIdx = 1, getRoomCount() do
+        for displayIdx = 1, getDisplaysPerRoom() do
+          flatIdx = displayFlatIndex(roomIdx, displayIdx)
+          labelCtl = Controls.displayLabel[flatIdx]
+          if labelCtl and trimString(labelCtl.String) == "" then
+            labelCtl.String = defaultDisplayLabel(roomIdx, displayIdx)
+          end
+        end
+      end
+    end)
+  end
+
+  function refreshAllOutputs()
+    for roomIdx = 1, getRoomCount() do
+      for displayIdx = 1, getDisplaysPerRoom() do
+        applyLedPair(roomIdx, displayIdx, getDisplayState(roomIdx, displayIdx))
+      end
+    end
+  end
+
+  function setAllDisplays(state)
+    for roomIdx = 1, getRoomCount() do
+      for displayIdx = 1, getDisplaysPerRoom() do
+        writeDisplayState(roomIdx, displayIdx, state)
+      end
+    end
+  end
+
+  function countLinkedRooms()
+    count = 0
+    for roomIdx = 1, getRoomCount() do
+      if isRoomLinkPowerEnabled(roomIdx) then
+        count = count + 1
+      end
+    end
+    return count
+  end
+
+  function formatPeerSummary()
+    parts = {}
+    for roomIdx = 1, getRoomCount() do
+      if isRoomLinkPowerEnabled(roomIdx) then
+        peerCount = 1
+        combineList = getCombineGroupRooms(roomIdx)
+        for cIdx = 1, #combineList do
+          peerIdx = combineList[cIdx]
+          if peerIdx ~= roomIdx and isRoomLinkPowerEnabled(peerIdx) then
+            peerCount = peerCount + 1
+          end
+        end
+        table.insert(parts, roomIdx .. "=" .. peerCount)
+      end
+    end
+    if #parts == 0 then return "none" end
+    return table.concat(parts, ",")
+  end
+
+  function updateStatus()
+    if not status then return end
+    combinerName = trimString(setupDefaultRC and setupDefaultRC.String or "")
+    if combinerName == "" then combinerName = "None" end
+    invalidateCaches()
+    activeGroups = getActiveGroups()
+    viewRoom = viewedRoomIdx()
+    pageLabel = viewRoom and ("Room " .. viewRoom) or PAGE_SETUP
+    status.String = string.format(
+      "v%s | Page %s | Rooms %d | Disp/Rm %d | LinkOn %d | Combiner %s | Groups %s:%s | Peers %s",
+      PluginInfo.Version,
+      pageLabel,
+      getRoomCount(),
+      getDisplaysPerRoom(),
+      countLinkedRooms(),
+      combinerName,
+      lastGroupSource,
+      formatGroupsCompact(activeGroups),
+      formatPeerSummary()
+    )
+  end
+
+  function handleLayoutChange()
+    refreshActiveDimensions()
+    syncPropertyPins()
+    invalidateCaches()
+    applyDisplayVisibility()
+    seedDisplayLabels()
+    refreshAllOutputs()
+    updateStatus()
+  end
+
+  -- Event wiring ------------------------------------------------------------
+  -- Factories take the control as a parameter so each handler closes over that
+  -- specific control object (globals would all point at the last bind).
+
+  function bindStateHandlerFor(roomIdx, displayIdx, stateCtl)
+    stateCtl.EventHandler = function()
+      if linkingBusy or not bootComplete then return end
+      state = stateCtl.Boolean == true
+      applyLedPair(roomIdx, displayIdx, state)
+      propagateLinkPowerState(roomIdx, displayIdx, state)
+      updateStatus()
+    end
+  end
+
+  function bindSetHandlerFor(roomIdx, displayIdx, setCtl)
+    setCtl.EventHandler = function()
+      if linkingBusy or not bootComplete then return end
+      setDisplayState(roomIdx, displayIdx, true, true)
+      updateStatus()
+    end
+  end
+
+  function bindResetHandlerFor(roomIdx, displayIdx, resetCtl)
+    resetCtl.EventHandler = function()
+      if linkingBusy or not bootComplete then return end
+      setDisplayState(roomIdx, displayIdx, false, true)
+      updateStatus()
+    end
+  end
+
+  function bindToggleHandlerFor(roomIdx, displayIdx, toggleCtl)
+    toggleCtl.EventHandler = function()
+      if linkingBusy or not bootComplete then return end
+      setDisplayState(roomIdx, displayIdx, not getDisplayState(roomIdx, displayIdx), true)
+      updateStatus()
+    end
+  end
+
+  function bindLinkPowerHandlerFor(roomIdx, linkCtl)
+    linkCtl.EventHandler = function()
+      if linkingBusy or not bootComplete then return end
+      invalidateCaches()
+      if isRoomLinkPowerEnabled(roomIdx) then
+        syncLinkedGroupsFromLeaders()
+      end
+      updateStatus()
+    end
+  end
+
+  cacheControlRefs()
+  for roomIdx = 1, getRoomCount() do
+    if linkPowerCtrls[roomIdx] then
+      bindLinkPowerHandlerFor(roomIdx, linkPowerCtrls[roomIdx])
+    end
+    for displayIdx = 1, getDisplaysPerRoom() do
+      if stateCtrls[roomIdx][displayIdx] then
+        bindStateHandlerFor(roomIdx, displayIdx, stateCtrls[roomIdx][displayIdx])
+      end
+      if setCtrls[roomIdx][displayIdx] then
+        bindSetHandlerFor(roomIdx, displayIdx, setCtrls[roomIdx][displayIdx])
+      end
+      if resetCtrls[roomIdx][displayIdx] then
+        bindResetHandlerFor(roomIdx, displayIdx, resetCtrls[roomIdx][displayIdx])
+      end
+      if toggleCtrls[roomIdx][displayIdx] then
+        bindToggleHandlerFor(roomIdx, displayIdx, toggleCtrls[roomIdx][displayIdx])
+      end
+    end
+  end
+
+  if Controls.setupAllOn then
+    Controls.setupAllOn.EventHandler = function()
+      if linkingBusy or not bootComplete then return end
+      setAllDisplays(true)
+      updateStatus()
+    end
+  end
+
+  if Controls.setupAllOff then
+    Controls.setupAllOff.EventHandler = function()
+      if linkingBusy or not bootComplete then return end
+      setAllDisplays(false)
+      updateStatus()
+    end
+  end
+
+  if setupLinkPower then
+    setupLinkPower.EventHandler = function()
+      if linkingBusy or not bootComplete then return end
+      applySetupLinkPowerMaster(setupLinkPower.Boolean == true)
+      invalidateCaches()
+      if setupLinkPower.Boolean then
+        syncLinkedGroupsFromLeaders()
+      end
+      updateStatus()
+    end
+  end
+
+  if setupRoomCombiner then
+    setupRoomCombiner.EventHandler = function(ctl)
+      if not bootComplete then return end
+      if setupDefaultRC then
+        setupDefaultRC.String = ctl.String
+      end
+      setRoomCombiner(ctl.String)
+    end
+  end
+
+  Properties["page_index"].EventHandler = function()
+    activePageIdx = Properties["page_index"].Value
+    -- Do not touch IsInvisible on tab change (Style=None owns tabs).
+    Timer.CallAfter(function()
+      pcall(updateStatus)
+    end, 0.15)
+  end
+
+  configPollTimer.EventHandler = function()
+    pollCombinerChanges()
+  end
+  configPollTimer:Start(0.25)
+
+  lastDimensionFingerprint = ""
+
+  function dimensionFingerprint()
+    return string.format("%d|%d", getRoomCount(), getDisplaysPerRoom())
+  end
+
+  pagePollTimer.EventHandler = function()
+    pageIdx = Properties["page_index"].Value
+    if pageIdx ~= activePageIdx then
+      activePageIdx = pageIdx
+      updateStatus()
+    end
+    refreshActiveDimensions()
+    fp = dimensionFingerprint()
+    if fp ~= lastDimensionFingerprint then
+      lastDimensionFingerprint = fp
+      handleLayoutChange()
+      cacheControlRefs()
+    end
+  end
+  pagePollTimer:Start(0.25)
+
+  -- Boot --------------------------------------------------------------------
+
+  print("Room Combine Power Controls " .. PluginInfo.Version)
+  refreshActiveDimensions()
+  cacheControlRefs()
+  syncPropertyPins()
+  seedDisplayLabels()
+  refreshAllOutputs()
+  applyDisplayVisibility()
+  scanRoomCombiners()
+
+  savedCombiner = trimString(setupDefaultRC and setupDefaultRC.String or "")
+  if savedCombiner == "" then
+    savedCombiner = trimString(setupRoomCombiner and setupRoomCombiner.String or "")
+  end
+  setRoomCombiner(savedCombiner)
+
+  bootComplete = true
+  handleLayoutChange()
+  lastDimensionFingerprint = dimensionFingerprint()
+  syncLinkedGroupsFromLeaders()
+  updateStatus()
+end

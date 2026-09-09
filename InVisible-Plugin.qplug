@@ -1,0 +1,276 @@
+-- Visible InVisible Control Plugin
+-- by Hori Shogo
+-- June 2025
+
+-- Information block for the plugin
+PluginInfo = {
+  Version = "1.0.0",
+  BuildVersion = "1.0.0",
+  Id = "ebd9adfd-26d8-4a1c-93a1-892b4cdcfdb5",--<guid>
+  Author = "Hori Shogo",
+  Description =
+[[Switches the visibility-invisibility of Control.]],
+  ShowDebug = true,
+}
+PluginInfo.Name = "UCI~InVisible Control v"..PluginInfo.Version
+
+function GetColor(props)
+  return { 0, 0, 0 }
+end
+
+function GetPrettyName(props)
+  return "Visible InVisible Control v" .. PluginInfo.Version
+end
+--List the pages within the plugin
+PageNames = { "Controls" }
+
+-- Define User configurable Properties of the plugin
+function GetProperties()
+  local props = {}
+  table.insert(props, {
+    Name = "Control Number",
+    Type = "integer",
+    Min = 1, Max = 256,
+    Value = 1,
+    Header = "Value must be number between 1 and 256",
+  })
+  table.insert(props, {
+    Name = "Button Type",
+    Type = "enum",
+    Choices = {"Momentary","Toggle","Trigger",},
+    Value = "Toggle",
+    Header = "Button Type",
+  })
+  table.insert(props, {
+    Name = "Knob Unit",
+    Type = "enum",
+    Choices = {"dB","Float","Integer","Percent","Position"},--,"Seconds"
+    Value = "dB",
+    Header = "Knob Unit",
+  })
+  table.insert(props, {
+    Name = "Max Value(dB)",
+    Type = "integer",
+    Min = -100, Max = 20,
+    Value = 20,
+  })
+  table.insert(props, {
+    Name = "Min Value(dB)",
+    Type = "integer",
+    Min = -100, Max = 20,
+    Value = -100,
+  })
+  table.insert(props, {
+    Name = "Max Value(Float)",
+    Type = "double",
+    Min = -1000000000, Max = 1000000000,
+    Value = 100,
+  })
+  table.insert(props, {
+    Name = "Min Value(Float)",
+    Type = "double",
+    Min = -1000000000, Max = 1000000000,
+    Value = 0,
+  })
+  table.insert(props, {
+    Name = "Max Value(Integer)",
+    Type = "integer",
+    Min = -999999999, Max = 999999999,
+    Value = 100,
+  })
+  table.insert(props, {
+    Name = "Min Value(Integer)",
+    Type = "integer",
+    Min = -999999999, Max = 999999999,
+    Value = 1,
+  })
+  table.insert(props, {
+    Name = "Max Value(Percent)",
+    Type = "double",
+    Min = 0, Max = 100,
+    Value = 100,
+  })
+  table.insert(props, {
+    Name = "Min Value(Percent)",
+    Type = "double",
+    Min = 0, Max = 100,
+    Value = 0,
+  })
+  table.insert(props, {
+    Name = "Max Value(Position)",
+    Type = "double",
+    Min = 0, Max = 1,
+    Value = 1,
+  })
+  table.insert(props, {
+    Name = "Min Value(Position)",
+    Type = "double",
+    Min = 0, Max = 1,
+    Value = 0,
+  })
+  table.insert(props, {
+    Name = "Max Value(Seconds)",
+    Type = "double",
+    Min = 0, Max = 87400,
+    Value = 1,
+  })
+  table.insert(props, {
+    Name = "Min Value(Seconds)",
+    Type = "double",
+    Min = 0, Max = 87400,
+    Value = 0,
+  })
+  return props
+end
+
+function RectifyProperties(props)
+  local unit = props["Knob Unit"].Value
+  props["Max Value(dB)"].IsHidden = (unit ~= "dB")
+  props["Min Value(dB)"].IsHidden = (unit ~= "dB")
+  
+  props["Max Value(Float)"].IsHidden = (unit ~= "Float")
+  props["Min Value(Float)"].IsHidden = (unit ~= "Float")
+  
+  props["Max Value(Integer)"].IsHidden = (unit ~= "Integer")
+  props["Min Value(Integer)"].IsHidden = (unit ~= "Integer")
+  
+  props["Max Value(Percent)"].IsHidden = (unit ~= "Percent")
+  props["Min Value(Percent)"].IsHidden = (unit ~= "Percent")
+  
+  props["Max Value(Position)"].IsHidden = (unit ~= "Position")
+  props["Min Value(Position)"].IsHidden = (unit ~= "Position")
+  
+  props["Max Value(Seconds)"].IsHidden = (unit ~= "Seconds")
+  props["Min Value(Seconds)"].IsHidden = (unit ~= "Seconds")
+  return props
+end
+
+-- Defines the Controls used within the plugin
+function GetControls(props)
+  local ctrls = {}
+  local ControlName = {
+    Name = {"Button","Knob","Meter","Text",},
+  }
+  
+  local knobMin, knobMax
+  local unit = props["Knob Unit"].Value
+  if unit == "dB" then
+    knobMin = props["Min Value(dB)"].Value
+    knobMax = props["Max Value(dB)"].Value
+  elseif unit == "Float" then
+    knobMin = props["Min Value(Float)"].Value
+    knobMax = props["Max Value(Float)"].Value
+  elseif unit == "Integer" then
+    knobMin = props["Min Value(Integer)"].Value
+    knobMax = props["Max Value(Integer)"].Value
+  elseif unit == "Percent" then
+    knobMin = props["Min Value(Percent)"].Value
+    knobMax = props["Max Value(Percent)"].Value
+  elseif unit == "Position" then
+    knobMin = props["Min Value(Position)"].Value
+    knobMax = props["Max Value(Position)"].Value
+  elseif unit == "Seconds" then
+    knobMin = props["Min Value(Seconds)"].Value
+    knobMax = props["Max Value(Seconds)"].Value
+  end
+  
+  --Arrays of Controls
+  for i=1, #ControlName.Name do
+    table.insert(ctrls, {
+      Name = ControlName.Name[i],
+      ControlType = ControlName.Name[i] == "Meter" and "Indicator" or ControlName.Name[i],
+      ButtonType = ControlName.Name[i] == "Button" and props["Button Type"].Value or nil,
+      IndicatorType = ControlName.Name[i] == "Meter" and "Meter" or nil,
+      ControlUnit = ControlName.Name[i] == "Knob" and props["Knob Unit"].Value or nil,
+      Count = props["Control Number"].Value,
+      Min = ControlName.Name[i] == "Knob" and knobMin or nil,
+      Max = ControlName.Name[i] == "Knob" and knobMax or nil,
+      UserPin = false,
+      PinStyle = "Both",
+    })
+  end
+  
+  table.insert(ctrls, {
+    Name = "Invisible",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    Count = props["Control Number"].Value,
+    UserPin = false,
+    PinStyle = "Both",
+  })
+  return ctrls
+end
+
+--Layout of controls and graphics for the plugin UI to display
+function GetControlLayout(props)
+  local layout = {}
+  local graphics = {}
+  local CurrentPage = PageNames[props["page_index"].Value]
+  local num = props["Control Number"].Value
+  local blocks = math.ceil(num / 10)
+  
+  local labels, ctrls, meter = {size={64,16}}, {size={36,16}}, {size={label={64,112},ctrl={36,112}}}
+  local space = {x=36, y=16, m=112, block=106}
+  
+  if CurrentPage == "Controls" then
+    local texts = {"Invisible", "Button", "Knob", "Text", "Meter"}
+  
+    for block = 1, blocks do
+      local ypos_base = (block - 1) * (5 * space.y + space.block)
+      for i = 1, #texts do
+        local ypos = ypos_base + space.y * (i - 1)
+        table.insert(graphics, {
+          Type = "Text",
+          Text = texts[i],
+          Position = {0, ypos},
+          Size = i == 5 and meter.size.label or labels.size,
+          Font = "Roboto",
+          HTextAlign = "Left",
+        })
+      end
+    end
+  
+    local c_Ctrls = {name = {"Invisible", "Button", "Knob", "Text", "Meter"}}
+    for ctrlNameIndex, ctrlName in ipairs(c_Ctrls.name) do
+      for index = 1, num do
+        local suffix = num == 1 and "" or " " .. index
+        local block = math.ceil(index / 10)
+        local col = (index - 1) % 10
+        local xpos = 64 + space.x * col
+        local ypos = (block - 1) * (5 * space.y + space.block) + (ctrlNameIndex - 1) * space.y
+        layout[ctrlName .. suffix] = {
+          PrettyName = string.format("%s", ctrlName .. " " .. index),
+          --PrettyName = string.format("%s~%s", ctrlName, ctrlName .. " " .. index),
+          Position = {xpos, ypos},
+          Size = ctrlName == "Meter" and meter.size.ctrl or ctrls.size,
+        }
+      end
+    end
+  end
+  return layout, graphics
+end
+
+--Start event based logic
+if Controls then
+  -- Create func return table if not table to check if Controls type is table
+  function CheckTypeTable(control) return type(control) == "table" and control or {control} end
+  for ctrlName, ctrl in pairs(Controls) do
+    Controls[ctrlName] = CheckTypeTable(Controls[ctrlName])
+  end
+  
+  function IsInvisible()
+    for index, isInvisible in ipairs(Controls.Invisible) do
+      isInvisible.EventHandler = function()
+        for ctrlName, ctrl in pairs(Controls) do
+          if ctrlName ~= "Invisible" then
+            Controls[ctrlName][index].IsInvisible = isInvisible.Boolean
+          end
+        end
+      end
+  
+      isInvisible.EventHandler()
+    end
+  end
+  
+  IsInvisible()
+end

@@ -1,0 +1,704 @@
+-- App Launcher
+-- USB keyboard HID app launcher (from App Launcher v3.1 user component)
+-- by Skip Mussett / Cursor Agent
+-- July 2026
+
+PluginInfo = {
+  Name = "Utilities~App Launcher",
+  Version = "1.0.3",
+  BuildVersion = "1.0.3.0",
+  Id = "d1202965-759f-46a0-ab50-19e004b9da01",
+  Author = "Skip Mussett",
+  Description = [[
+Launches host PC apps by emulating keyboard shortcuts through a Q-SYS
+USB HID Keyboard component. Discovers available keyboards, auto-detects
+Windows vs Mac, and triggers Start/Spotlight search + typed app names.
+1.0.3: Faceplate uses the same #333333 GroupBox + #dcdce4 Color/TextColor
+labels and light fields as Video Routing / Power so Designer Light and
+Dark invert together. Re-drag required.
+  ]],
+  ShowDebug = true,
+}
+
+PageNames = { "Setup", "Apps" }
+MAX_APPS = 16
+
+function GetColor(props)
+  return { 1, 102, 255 }
+end
+
+function GetPrettyName(props)
+  return string.format(
+    "App Launcher v%s (%d apps)",
+    PluginInfo.Version,
+    props["App Count"].Value
+  )
+end
+
+-- Q-SYS brand colors (Badge Usage Guide / Brand Color guidelines)
+UI = {
+  boldBlue = { 1, 102, 255 },
+  cyan = { 27, 212, 219 },
+  bg = { 51, 51, 51 },
+  panel = { 51, 51, 51 },
+  card = { 51, 51, 51 },
+  cardAlt = { 51, 51, 51 },
+  stroke = { 255, 255, 255 },
+  controlStroke = { 198, 198, 206 },
+  accent = { 1, 102, 255 },
+  accentSoft = { 27, 212, 219 },
+  headerLabel = { 220, 220, 228 },
+  text = { 220, 220, 228 },
+  muted = { 168, 168, 176 },
+  textDark = { 20, 20, 24 },
+  ledOn = { 27, 212, 219 },
+  ledOff = { 48, 48, 54 },
+  btnOn = { 1, 102, 255 },
+  btnOff = { 90, 90, 98 },
+  fieldSummary = { 245, 245, 248 },
+}
+
+function GetPages(props)
+  pages = {}
+  for idx, name in ipairs(PageNames) do
+    table.insert(pages, { name = PageNames[idx] })
+  end
+  return pages
+end
+
+function GetProperties()
+  props = {}
+  table.insert(props, {
+    Name = "App Count",
+    Type = "integer",
+    Min = 1,
+    Max = MAX_APPS,
+    Value = 6,
+  })
+  table.insert(props, {
+    Name = "Default Keyboard",
+    Type = "string",
+    Value = "",
+  })
+  table.insert(props, {
+    Name = "Launch Lockout Seconds",
+    Type = "double",
+    Min = 0.5,
+    Max = 10,
+    Value = 3,
+  })
+  return props
+end
+
+function RectifyProperties(props)
+  if props["App Count"].Value > MAX_APPS then
+    props["App Count"].Value = MAX_APPS
+  end
+  if props["App Count"].Value < 1 then
+    props["App Count"].Value = 1
+  end
+  return props
+end
+
+function GetControls(props)
+  ctrls = {}
+  appCount = props["App Count"].Value
+
+  table.insert(ctrls, {
+    Name = "codeName",
+    ControlType = "Text",
+    TextBoxType = "ComboBox",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "pcType",
+    ControlType = "Text",
+    TextBoxType = "ComboBox",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "reload",
+    ControlType = "Button",
+    ButtonType = "Momentary",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "status",
+    ControlType = "Text",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "kbConnected",
+    ControlType = "Indicator",
+    IndicatorType = "LED",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "appControl",
+    ControlType = "Button",
+    ButtonType = "Trigger",
+    Count = appCount,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "appName",
+    ControlType = "Text",
+    Count = appCount,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "appSearch",
+    ControlType = "Text",
+    Count = appCount,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+
+  return ctrls
+end
+
+function GetControlLayout(props)
+  layout = {}
+  graphics = {}
+  appCount = props["App Count"].Value
+  currentPage = PageNames[props["page_index"].Value]
+  panelWidth = 520
+  FONT_SIZE = 9
+  RADIUS = 5
+  appRowHeight = 34
+  setupHeight = 210
+  appsHeight = 114 + (appCount * appRowHeight)
+
+  function gLabel(text, x, y, w, h, bold, fontSize, align)
+    table.insert(graphics, {
+      Type = "Label",
+      Text = text,
+      Position = { x, y },
+      Size = { w, h or 14 },
+      Color = UI.headerLabel,
+      TextColor = UI.headerLabel,
+      Font = bold and "Montserrat" or "Roboto",
+      FontStyle = bold and "Bold" or "Regular",
+      FontSize = fontSize or FONT_SIZE,
+      HTextAlign = align or "Left",
+    })
+  end
+
+  function gFill(x, y, w, h, fill, strokeWidth, strokeColor, cornerRadius)
+    boxW = math.floor(w + 0.5)
+    boxH = math.floor(h + 0.5)
+    if boxW < 1 then boxW = 1 end
+    if boxH < 1 then boxH = 1 end
+    radius = cornerRadius or 0
+    maxRadius = math.floor(math.min(boxW, boxH) / 2)
+    if radius > maxRadius then radius = maxRadius end
+    sw = strokeWidth or 0
+    edge = strokeColor or fill
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Text = "",
+      Font = "Roboto",
+      FontStyle = "Regular",
+      FontSize = FONT_SIZE,
+      Fill = fill,
+      Color = edge,
+      StrokeWidth = sw,
+      StrokeColor = edge,
+      CornerRadius = radius,
+      Position = { x, y },
+      Size = { boxW, boxH },
+    })
+  end
+
+  function gCard(x, y, w, h)
+    gFill(x, y, w, h, UI.card, 1, UI.stroke, RADIUS)
+  end
+
+  function gPanelBg(w, h)
+    gFill(0, 0, w, h, UI.bg, 0, nil, RADIUS)
+  end
+
+  function gPageTitle(text, panelH)
+    gPanelBg(panelWidth, panelH)
+    gLabel(text, 16, 8, panelWidth - 32, 28, true, 24)
+    gFill(16, 44, panelWidth - 32, 1, UI.stroke, 0, nil, 0)
+  end
+
+  function comboLayout(x, y, w, h)
+    return {
+      Style = "ComboBox",
+      Position = { x, y },
+      Size = { w, h },
+      CornerRadius = RADIUS,
+      Color = UI.fieldSummary,
+      StrokeWidth = 1,
+      StrokeColor = UI.controlStroke,
+      TextColor = UI.textDark,
+      FontSize = FONT_SIZE,
+      Font = "Roboto",
+      FontStyle = "Regular",
+    }
+  end
+
+  function fieldLayout(x, y, w, h, readOnly)
+    return {
+      Style = "Text",
+      IsReadOnly = readOnly and true or false,
+      Position = { x, y },
+      Size = { w, h },
+      CornerRadius = RADIUS,
+      Color = UI.fieldSummary,
+      StrokeWidth = 1,
+      StrokeColor = UI.controlStroke,
+      TextColor = UI.textDark,
+      FontSize = FONT_SIZE,
+      Font = "Roboto",
+      FontStyle = "Regular",
+      HTextAlign = "Left",
+    }
+  end
+
+  function triggerLayout(x, y, w, h, legend)
+    return {
+      Style = "Button",
+      ButtonStyle = "Trigger",
+      ButtonVisualStyle = "Flat",
+      Position = { x, y },
+      Size = { w, h },
+      CornerRadius = RADIUS,
+      Color = UI.btnOff,
+      StrokeWidth = 1,
+      StrokeColor = UI.controlStroke,
+      Legend = legend,
+      FontSize = FONT_SIZE,
+      Font = "Roboto",
+      FontStyle = "Regular",
+    }
+  end
+
+  function momentaryLayout(x, y, w, h, legend)
+    return {
+      Style = "Button",
+      ButtonStyle = "Momentary",
+      ButtonVisualStyle = "Flat",
+      Position = { x, y },
+      Size = { w, h },
+      CornerRadius = RADIUS,
+      Color = UI.btnOn,
+      OffColor = UI.btnOff,
+      UnlinkOffColor = true,
+      StrokeWidth = 1,
+      StrokeColor = UI.controlStroke,
+      Legend = legend,
+      FontSize = FONT_SIZE,
+      Font = "Roboto",
+      FontStyle = "Regular",
+    }
+  end
+
+  layout["status"] = {
+    PrettyName = "Setup~Status",
+    Style = "None",
+  }
+  layout["kbConnected"] = {
+    PrettyName = "Setup~Keyboard Connected",
+    Style = "None",
+  }
+
+  for appIdx = 1, appCount do
+    layout["appControl " .. appIdx] = {
+      PrettyName = string.format("Apps~Launch %d", appIdx),
+      Style = "None",
+    }
+    layout["appName " .. appIdx] = {
+      PrettyName = string.format("Apps~Name %d", appIdx),
+      Style = "None",
+    }
+    layout["appSearch " .. appIdx] = {
+      PrettyName = string.format("Apps~Search %d", appIdx),
+      Style = "None",
+    }
+  end
+
+  if currentPage == "Setup" then
+    gPageTitle("App Launcher", setupHeight)
+    gCard(10, 56, panelWidth - 20, 142)
+    gLabel("Keyboard link", 24, 64, 180, 14, true, 10)
+    gLabel("USB Keyboard", 24, 88, 100, 16, false, FONT_SIZE)
+    gLabel("Host OS", 24, 118, 100, 16, false, FONT_SIZE)
+    gLabel("USB", 24, 152, 36, 16, false, FONT_SIZE)
+
+    layout["codeName"] = comboLayout(128, 86, 280, 22)
+    layout["codeName"].PrettyName = "Setup~Keyboard"
+    layout["reload"] = momentaryLayout(416, 86, 70, 22, "Reload")
+    layout["reload"].PrettyName = "Setup~Reload Keyboards"
+    layout["pcType"] = comboLayout(128, 116, 200, 22)
+    layout["pcType"].PrettyName = "Setup~Host OS"
+    layout["kbConnected"] = {
+      PrettyName = "Setup~Keyboard Connected",
+      Style = "Led",
+      Position = { 62, 152 },
+      Size = { 14, 14 },
+      CornerRadius = 7,
+      Color = UI.ledOn,
+      OffColor = UI.ledOff,
+      UnlinkOffColor = true,
+    }
+    layout["status"] = fieldLayout(90, 148, 396, 22, true)
+    layout["status"].PrettyName = "Setup~Status"
+
+  elseif currentPage == "Apps" then
+    gPageTitle("Apps", appsHeight)
+    gCard(10, 56, panelWidth - 20, appsHeight - 68)
+    gLabel("#", 24, 66, 24, 14, true, 10, "Center")
+    gLabel("Button label", 54, 66, 140, 14, true, 10)
+    gLabel("Search text", 210, 66, 150, 14, true, 10)
+    gLabel("Launch", 400, 66, 80, 14, true, 10, "Center")
+
+    for appIdx = 1, appCount do
+      rowY = 88 + ((appIdx - 1) * appRowHeight)
+      gLabel(tostring(appIdx), 24, rowY + 6, 24, 16, true, 11, "Center")
+      layout["appName " .. appIdx] = fieldLayout(54, rowY + 4, 140, 20, false)
+      layout["appName " .. appIdx].PrettyName = string.format("Apps~Name %d", appIdx)
+      layout["appSearch " .. appIdx] = fieldLayout(210, rowY + 4, 170, 20, false)
+      layout["appSearch " .. appIdx].PrettyName = string.format("Apps~Search %d", appIdx)
+      layout["appControl " .. appIdx] = triggerLayout(400, rowY + 3, 86, 22, "App " .. appIdx)
+      layout["appControl " .. appIdx].PrettyName = string.format("Apps~Launch %d", appIdx)
+    end
+  end
+
+  return layout, graphics
+end
+
+if Controls then
+  appCount = Properties["App Count"].Value
+  lockoutSeconds = Properties["Launch Lockout Seconds"].Value
+
+  keyboard = nil
+  keys = {}
+  home, enter, space = nil, nil, nil
+  numLock, numLockLED, kbConnectedLED = nil, nil, nil
+  pcChoice = { "Windows", "Mac" }
+  PROMPT = "Choose the Keyboard to Control"
+
+  function setStatus(msg)
+    Controls.status.String = tostring(msg or "")
+  end
+
+  function fnDebugOSChange(os)
+    print("App Launcher detected host OS:", os)
+    setStatus("OS: " .. tostring(os))
+  end
+
+  function fnNameApps()
+    for i = 1, appCount do
+      legend = Controls.appName[i].String
+      if legend == nil or legend == "" then
+        legend = "App " .. i
+      end
+      Controls.appControl[i].Legend = legend
+    end
+  end
+
+  function PressKey(key, delay)
+    if not key then
+      return
+    end
+    Timer.CallAfter(function()
+      key.Boolean = true
+      Timer.CallAfter(function()
+        key.Boolean = false
+      end, 0.08)
+    end, delay)
+  end
+
+  function TypeText(text)
+    text = tostring(text or "")
+    for i = 1, #text do
+      letter = string.lower(string.sub(text, i, i))
+      if keys[letter] then
+        PressKey(keys[letter], (i - 1) * 0.15)
+      end
+    end
+  end
+
+  function fnCheckPC()
+    return Controls.pcType.String == pcChoice[2]
+  end
+
+  function fnStartSearch()
+    if not keyboard then
+      return
+    end
+    home.Boolean = true
+    if fnCheckPC() then
+      space.Boolean = true
+    end
+    Timer.CallAfter(function()
+      home.Boolean = false
+      space.Boolean = false
+    end, 0.15)
+  end
+
+  function fnEnter()
+    if not enter then
+      return
+    end
+    enter.Boolean = true
+    Timer.CallAfter(function()
+      enter.Boolean = false
+    end, 0.1)
+  end
+
+  function fnAppLaunchDisable()
+    for i = 1, appCount do
+      Controls.appControl[i].IsDisabled = true
+    end
+    Timer.CallAfter(function()
+      for i = 1, appCount do
+        Controls.appControl[i].IsDisabled = false
+      end
+    end, lockoutSeconds)
+  end
+
+  function LaunchApp(appName)
+    appName = tostring(appName or "")
+    if appName == "" then
+      setStatus("No search text for that app")
+      return
+    end
+    if not keyboard then
+      setStatus("No keyboard selected")
+      return
+    end
+    setStatus("Launching: " .. appName)
+    fnStartSearch()
+    Timer.CallAfter(function()
+      TypeText(appName)
+    end, 0.25)
+    Timer.CallAfter(function()
+      fnEnter()
+    end, 0.25 + (#appName * 0.15) + 0.25)
+    fnAppLaunchDisable()
+  end
+
+  function pressNumLock()
+    if not numLock then
+      return
+    end
+    numLock.Boolean = true
+    Timer.CallAfter(function()
+      numLock.Boolean = false
+    end, 0.10)
+  end
+
+  function detect()
+    if not keyboard then
+      return
+    end
+    if kbConnectedLED and not kbConnectedLED.Boolean then
+      fnDebugOSChange("No host connected")
+      return
+    end
+    if not numLockLED then
+      setStatus("Num Lock LED unavailable - set OS manually")
+      return
+    end
+    before = numLockLED.Boolean
+    pressNumLock()
+    Timer.CallAfter(function()
+      after = numLockLED.Boolean
+      if after ~= before then
+        fnDebugOSChange("Windows")
+        Controls.pcType.String = pcChoice[1]
+        pressNumLock()
+      else
+        fnDebugOSChange("Mac (probably)")
+        Controls.pcType.String = pcChoice[2]
+      end
+    end, 0.75)
+  end
+
+  function fnDisable(state)
+    for idx = 1, appCount do
+      Controls.appControl[idx].IsDisabled = not state
+    end
+    Controls.pcType.String = state and "Detecting..." or "USB Disconnected"
+    Controls.kbConnected.Boolean = state and true or false
+    if not state then
+      setStatus("USB Disconnected")
+    end
+  end
+
+  function usbConnection(state)
+    Controls.kbConnected.Boolean = state and true or false
+    fnDisable(state)
+    if state then
+      Timer.CallAfter(detect, 1)
+    end
+  end
+
+  function bindKeyboard()
+    name = Controls.codeName.String
+    if not name or name == "" or name == PROMPT then
+      keyboard = nil
+      fnDisable(false)
+      setStatus(PROMPT)
+      return
+    end
+
+    success, comp = pcall(Component.New, name)
+    if not success or not comp then
+      keyboard = nil
+      fnDisable(false)
+      setStatus("Cannot open keyboard: " .. tostring(name))
+      return
+    end
+
+    keyboard = comp
+    keys = {}
+    for char in string.gmatch("abcdefghijklmnopqrstuvwxyz 0123456789.", ".") do
+      if char ~= " " then
+        keys[char] = keyboard["key." .. char]
+      else
+        keys[char] = keyboard["key.space"]
+      end
+    end
+    home = keyboard["key.left.meta"]
+    enter = keyboard["key.enter"]
+    space = keyboard["key.space"]
+    numLock = keyboard["key.num.lock"]
+    numLockLED = keyboard["kb.led.num.lock"]
+    kbConnectedLED = keyboard["kb.led.connected"]
+
+    if not kbConnectedLED then
+      setStatus("Keyboard bound, but connected LED missing (Script Access?)")
+      fnDisable(true)
+      return
+    end
+
+    kbConnectedLED.EventHandler = function(ctl)
+      usbConnection(ctl.Boolean)
+    end
+    setStatus("Controlling: " .. name)
+    usbConnection(kbConnectedLED.Boolean)
+  end
+
+  function fnDiscoverKeyboards()
+    keyboardComps = {}
+    comps = Component.GetComponents() or {}
+    for _, v in pairs(comps) do
+      if v.Type == "usb_keyboard" and v.Name and v.Name ~= "" then
+        table.insert(keyboardComps, v.Name)
+      end
+    end
+    Controls.codeName.Choices = keyboardComps
+
+    sel = Controls.codeName.String
+    isValid = false
+    for _, n in ipairs(keyboardComps) do
+      if n == sel then
+        isValid = true
+        break
+      end
+    end
+
+    if not isValid then
+      defaultName = Properties["Default Keyboard"].Value
+      for _, n in ipairs(keyboardComps) do
+        if n == defaultName then
+          Controls.codeName.String = defaultName
+          isValid = true
+          break
+        end
+      end
+    end
+
+    if not isValid then
+      if #keyboardComps == 1 then
+        Controls.codeName.String = keyboardComps[1]
+      else
+        Controls.codeName.String = PROMPT
+      end
+    end
+
+    setStatus(string.format("Found %d USB keyboard(s)", #keyboardComps))
+  end
+
+  function initDefaultApps()
+    for i = 1, appCount do
+      if Controls.appName[i].String == "" then
+        Controls.appName[i].String = "Button Label"
+      end
+      if Controls.appSearch[i].String == "" then
+        Controls.appSearch[i].String = "Search Text"
+      end
+    end
+  end
+
+  function bindOneApp(appIdx)
+    Controls.appName[appIdx].EventHandler = function()
+      fnNameApps()
+    end
+    Controls.appControl[appIdx].EventHandler = function()
+      LaunchApp(Controls.appSearch[appIdx].String)
+    end
+  end
+
+  function bindAppHandlers()
+    for i = 1, appCount do
+      bindOneApp(i)
+    end
+  end
+
+  function setup()
+    initDefaultApps()
+    Controls.pcType.Choices = pcChoice
+    if Controls.pcType.String == "" then
+      Controls.pcType.String = pcChoice[1]
+    end
+
+    fnDiscoverKeyboards()
+    fnNameApps()
+    bindAppHandlers()
+
+    Controls.codeName.EventHandler = function()
+      bindKeyboard()
+    end
+    Controls.reload.EventHandler = function()
+      fnDiscoverKeyboards()
+      bindKeyboard()
+    end
+
+    bindKeyboard()
+  end
+
+  ok, err = pcall(setup)
+  if not ok then
+    print("App Launcher init error:", err)
+    setStatus("Script error: " .. tostring(err))
+  end
+
+  Timer.CallAfter(function()
+    ok2, err2 = pcall(function()
+      fnDiscoverKeyboards()
+      bindKeyboard()
+      fnNameApps()
+    end)
+    if not ok2 then
+      print("App Launcher delayed init error:", err2)
+    end
+  end, 0.5)
+end

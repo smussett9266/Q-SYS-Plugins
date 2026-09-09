@@ -1,0 +1,1207 @@
+-- Recordinator
+-- Lecture recording TCP client for The Record-Inator (from recordinator v1.0 user component)
+-- Protocol: The Record-Inator v1.0 communication manual (STX/ETX, TCP 5201)
+-- by Skip Mussett / Cursor Agent
+-- August 2026
+
+PluginInfo = {
+  Name = "Utilities~Recordinator",
+  Version = "1.0.6",
+  BuildVersion = "1.0.6.0",
+  Id = "c4e8a1d2-7b93-4f6e-91a0-5d2c8b47e6f1",
+  Author = "Skip Mussett",
+  Description = [[
+Controls a Record-Inator lecture recorder over TCP. Query the class list,
+confirm a session, record, and stop/save. Power and operational states
+follow the v1.0 communication manual (WTG / RDY / REC / SAV).
+  ]],
+  ShowDebug = true,
+}
+
+PageNames = { "Setup", "Recording" }
+LED_STATES = { "WTG", "RDY", "REC", "SAV" }
+MAX_RECORD_SECONDS = 999
+
+function GetColor(props)
+  return { 1, 102, 255 }
+end
+
+function GetPrettyName(props)
+  return "Recordinator v" .. PluginInfo.Version
+end
+
+UI = {
+  boldBlue = { 1, 102, 255 },
+  cyan = { 27, 212, 219 },
+  balancedBlack = { 28, 28, 28 },
+  pureWhite = { 255, 255, 255 },
+  expertGreen = { 0, 196, 120 },
+  electricRed = { 255, 45, 85 },
+  bg = { 28, 28, 28 },
+  panel = { 40, 40, 44 },
+  card = { 48, 48, 54 },
+  cardAlt = { 56, 56, 62 },
+  stroke = { 78, 78, 88 },
+  accent = { 1, 102, 255 },
+  accentSoft = { 27, 212, 219 },
+  text = { 255, 255, 255 },
+  muted = { 168, 168, 176 },
+  ledOn = { 0, 196, 120 },
+  ledOff = { 112, 36, 48 },
+  btnOn = { 1, 102, 255 },
+  btnOff = { 56, 56, 64 },
+  header = { 28, 28, 28 },
+}
+
+function GetPages(props)
+  pages = {}
+  for idx, name in ipairs(PageNames) do
+    table.insert(pages, { name = PageNames[idx] })
+  end
+  return pages
+end
+
+function GetProperties()
+  props = {}
+  table.insert(props, {
+    Name = "Default IP",
+    Type = "string",
+    Value = "127.0.0.1",
+  })
+  table.insert(props, {
+    Name = "Default Port",
+    Type = "integer",
+    Min = 1,
+    Max = 65535,
+    Value = 5201,
+  })
+  table.insert(props, {
+    Name = "Poll Seconds",
+    Type = "double",
+    Min = 1,
+    Max = 30,
+    Value = 5,
+  })
+  return props
+end
+
+function RectifyProperties(props)
+  if props["Default Port"].Value < 1 then
+    props["Default Port"].Value = 1
+  elseif props["Default Port"].Value > 65535 then
+    props["Default Port"].Value = 65535
+  end
+  if props["Poll Seconds"].Value < 1 then
+    props["Poll Seconds"].Value = 1
+  elseif props["Poll Seconds"].Value > 30 then
+    props["Poll Seconds"].Value = 30
+  end
+  return props
+end
+
+function GetControls(props)
+  ctrls = {}
+
+  table.insert(ctrls, {
+    Name = "txtIPAddress",
+    ControlType = "Text",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+    DefaultValue = props["Default IP"].Value,
+  })
+  table.insert(ctrls, {
+    Name = "knbPort",
+    ControlType = "Knob",
+    ControlUnit = "Integer",
+    Min = 1,
+    Max = 65535,
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+    DefaultValue = props["Default Port"].Value,
+  })
+  table.insert(ctrls, {
+    Name = "btnPowerToggle",
+    ControlType = "Button",
+    ButtonType = "Toggle",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "status",
+    ControlType = "Text",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "ledDeviceStatus",
+    ControlType = "Indicator",
+    IndicatorType = "Led",
+    Count = 4,
+    UserPin = true,
+    PinStyle = "Output",
+  })
+  table.insert(ctrls, {
+    Name = "saveTime",
+    ControlType = "Indicator",
+    IndicatorType = "Text",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Output",
+  })
+  table.insert(ctrls, {
+    Name = "btnQuery",
+    ControlType = "Button",
+    ButtonType = "Trigger",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "listClass",
+    ControlType = "Text",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "txtProfessor",
+    ControlType = "Indicator",
+    IndicatorType = "Text",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Output",
+  })
+  table.insert(ctrls, {
+    Name = "txtLecture",
+    ControlType = "Indicator",
+    IndicatorType = "Text",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Output",
+  })
+  table.insert(ctrls, {
+    Name = "txtClassID",
+    ControlType = "Indicator",
+    IndicatorType = "Text",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Output",
+  })
+  table.insert(ctrls, {
+    Name = "btnConfirm",
+    ControlType = "Button",
+    ButtonType = "Trigger",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "btnCancel",
+    ControlType = "Button",
+    ButtonType = "Trigger",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "btnRecord",
+    ControlType = "Button",
+    ButtonType = "Trigger",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "btnStop",
+    ControlType = "Button",
+    ButtonType = "Trigger",
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Both",
+  })
+  table.insert(ctrls, {
+    Name = "knbElapsed",
+    ControlType = "Knob",
+    ControlUnit = "Seconds",
+    Min = 0,
+    Max = MAX_RECORD_SECONDS,
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Output",
+  })
+  table.insert(ctrls, {
+    Name = "knbRemaining",
+    ControlType = "Knob",
+    ControlUnit = "Seconds",
+    Min = 0,
+    Max = MAX_RECORD_SECONDS,
+    Count = 1,
+    UserPin = true,
+    PinStyle = "Output",
+  })
+
+  return ctrls
+end
+
+function GetControlLayout(props)
+  layout = {}
+  graphics = {}
+  currentPage = PageNames[props["page_index"].Value]
+  panelWidth = 520
+
+  function hideCtrl(name, pretty)
+    layout[name] = {
+      PrettyName = pretty,
+      Style = "None",
+    }
+  end
+
+  hideCtrl("txtIPAddress", "Setup~IP Address")
+  hideCtrl("knbPort", "Setup~Port")
+  hideCtrl("btnPowerToggle", "Recording~Power")
+  hideCtrl("status", "Recording~System State")
+  hideCtrl("saveTime", "Recording~Saving")
+  hideCtrl("ledDeviceStatus 1", "Recording~Waiting")
+  hideCtrl("ledDeviceStatus 2", "Recording~Ready")
+  hideCtrl("ledDeviceStatus 3", "Recording~Recording")
+  hideCtrl("ledDeviceStatus 4", "Recording~Saving LED")
+  hideCtrl("btnQuery", "Recording~Query")
+  hideCtrl("listClass", "Recording~Classes")
+  hideCtrl("txtProfessor", "Recording~Professor")
+  hideCtrl("txtLecture", "Recording~Lecture")
+  hideCtrl("txtClassID", "Recording~Class ID")
+  hideCtrl("btnConfirm", "Recording~Confirm")
+  hideCtrl("btnCancel", "Recording~Cancel")
+  hideCtrl("btnRecord", "Recording~Record")
+  hideCtrl("btnStop", "Recording~Stop")
+  hideCtrl("knbElapsed", "Recording~Elapsed")
+  hideCtrl("knbRemaining", "Recording~Remaining")
+
+  function blendRgb(colorA, colorB, amount)
+    if amount < 0 then
+      amount = 0
+    elseif amount > 1 then
+      amount = 1
+    end
+    return {
+      math.floor(colorA[1] + ((colorB[1] - colorA[1]) * amount) + 0.5),
+      math.floor(colorA[2] + ((colorB[2] - colorA[2]) * amount) + 0.5),
+      math.floor(colorA[3] + ((colorB[3] - colorA[3]) * amount) + 0.5),
+    }
+  end
+
+  function drawBrandGradientBar(x, y, width, height, steps)
+    if steps < 2 then
+      steps = 2
+    end
+    stepWidth = width / steps
+    for stepIdx = 0, steps - 1 do
+      amount = stepIdx / (steps - 1)
+      segX = math.floor(x + (stepIdx * stepWidth))
+      nextX = math.floor(x + ((stepIdx + 1) * stepWidth))
+      if stepIdx == steps - 1 then
+        nextX = x + width
+      end
+      table.insert(graphics, {
+        Type = "GroupBox",
+        Fill = blendRgb(UI.boldBlue, UI.cyan, amount),
+        StrokeWidth = 0,
+        CornerRadius = 0,
+        Position = { segX, y },
+        Size = { math.max(1, nextX - segX), height },
+      })
+    end
+  end
+
+  function drawPageChrome(title, bodyHeight)
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Fill = UI.bg,
+      StrokeWidth = 0,
+      CornerRadius = 0,
+      Position = { 0, 0 },
+      Size = { panelWidth, bodyHeight },
+    })
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Fill = UI.header,
+      StrokeWidth = 0,
+      CornerRadius = 0,
+      Position = { 0, 0 },
+      Size = { panelWidth, 44 },
+    })
+    drawBrandGradientBar(0, 44, panelWidth, 3, 24)
+    table.insert(graphics, {
+      Type = "Label",
+      Text = title,
+      Position = { 14, 10 },
+      Size = { panelWidth - 28, 24 },
+      Color = UI.text,
+      Font = "Montserrat",
+      FontStyle = "Bold",
+      FontSize = 15,
+      HTextAlign = "Left",
+    })
+  end
+
+  function drawCard(x, y, width, height)
+    table.insert(graphics, {
+      Type = "GroupBox",
+      Fill = UI.panel,
+      StrokeWidth = 1,
+      StrokeColor = UI.stroke,
+      CornerRadius = 12,
+      Position = { x, y },
+      Size = { width, height },
+    })
+  end
+
+  function drawLabel(text, x, y, width, color, size)
+    table.insert(graphics, {
+      Type = "Label",
+      Text = text,
+      Position = { x, y },
+      Size = { width, 14 },
+      Color = color or UI.accentSoft,
+      Font = "Montserrat",
+      FontStyle = "Bold",
+      FontSize = size or 10,
+      HTextAlign = "Left",
+    })
+  end
+
+  function textField(pretty)
+    return {
+      PrettyName = pretty,
+      Style = "Text",
+      CornerRadius = 6,
+      Color = UI.card,
+      StrokeColor = UI.stroke,
+      TextColor = UI.text,
+    }
+  end
+
+  function flatButton(pretty, legend)
+    return {
+      PrettyName = pretty,
+      Style = "Button",
+      ButtonStyle = "Trigger",
+      ButtonVisualStyle = "Flat",
+      CornerRadius = 8,
+      Color = UI.btnOff,
+      OffColor = UI.btnOff,
+      UnlinkOffColor = true,
+      StrokeWidth = 0,
+      Legend = legend,
+      FontSize = 10,
+      Font = "Montserrat",
+      FontStyle = "Bold",
+      TextColor = UI.text,
+    }
+  end
+
+  function timeDisplay(pretty)
+    field = textField(pretty)
+    field.IsReadOnly = true
+    field.Color = UI.bg
+    field.TextColor = UI.accentSoft
+    field.HTextAlign = "Center"
+    field.Font = "Montserrat"
+    field.FontStyle = "Bold"
+    field.FontSize = 12
+    return field
+  end
+
+  if currentPage == "Setup" then
+    drawPageChrome("Setup", 168)
+    drawCard(10, 56, panelWidth - 20, 100)
+    drawLabel("CONNECTION", 24, 64, 180)
+    drawLabel("IP Address", 24, 88, 90, UI.muted, 11)
+    drawLabel("Port", 24, 118, 90, UI.muted, 11)
+
+    layout["txtIPAddress"] = textField("Setup~IP Address")
+    layout["txtIPAddress"].Position = { 128, 84 }
+    layout["txtIPAddress"].Size = { 358, 22 }
+
+    layout["knbPort"] = textField("Setup~Port")
+    layout["knbPort"].Position = { 128, 114 }
+    layout["knbPort"].Size = { 100, 22 }
+    layout["knbPort"].Style = "Text"
+
+  elseif currentPage == "Recording" then
+    drawPageChrome("Recordinator", 660)
+
+    drawCard(10, 56, panelWidth - 20, 58)
+    drawLabel("POWER", 24, 64, 180)
+    layout["btnPowerToggle"] = {
+      PrettyName = "Recording~Power",
+      Style = "Button",
+      ButtonStyle = "Toggle",
+      ButtonVisualStyle = "Flat",
+      Position = { 20, 82 },
+      Size = { 480, 24 },
+      CornerRadius = 12,
+      Color = UI.expertGreen,
+      OffColor = UI.btnOff,
+      UnlinkOffColor = true,
+      StrokeWidth = 0,
+      Legend = "Power",
+      FontSize = 11,
+      Font = "Montserrat",
+      FontStyle = "Bold",
+      TextColor = UI.text,
+    }
+
+    drawCard(10, 124, panelWidth - 20, 108)
+    drawLabel("DEVICE STATE", 24, 132, 180)
+    ledLabels = { "WTG", "RDY", "REC", "SAV" }
+    ledPretty = { "Recording~Waiting", "Recording~Ready", "Recording~Recording", "Recording~Saving LED" }
+    for ledIdx = 1, 4 do
+      ledX = 24 + ((ledIdx - 1) * 92)
+      table.insert(graphics, {
+        Type = "Label",
+        Text = ledLabels[ledIdx],
+        Position = { ledX + 20, 154 },
+        Size = { 48, 14 },
+        Color = UI.muted,
+        Font = "Roboto",
+        FontSize = 11,
+        HTextAlign = "Left",
+      })
+      layout["ledDeviceStatus " .. ledIdx] = {
+        PrettyName = ledPretty[ledIdx],
+        Style = "Led",
+        Position = { ledX, 154 },
+        Size = { 14, 14 },
+        CornerRadius = 7,
+        Color = UI.ledOn,
+        OffColor = UI.ledOff,
+        UnlinkOffColor = true,
+      }
+    end
+
+    drawLabel("SYSTEM STATE", 24, 178, 180)
+    layout["status"] = textField("Recording~System State")
+    layout["status"].Position = { 20, 196 }
+    layout["status"].Size = { 480, 22 }
+    layout["status"].IsReadOnly = true
+    layout["status"].TextColor = UI.text
+
+    drawCard(10, 242, 250, 248)
+    drawLabel("CLASSES", 24, 250, 180)
+
+    layout["listClass"] = {
+      PrettyName = "Recording~Classes",
+      Style = "ListBox",
+      Position = { 20, 270 },
+      Size = { 230, 176 },
+      CornerRadius = 6,
+      Color = UI.card,
+      StrokeColor = UI.stroke,
+      TextColor = UI.text,
+    }
+
+    layout["btnQuery"] = flatButton("Recording~Query", "Query")
+    layout["btnQuery"].Position = { 20, 454 }
+    layout["btnQuery"].Size = { 230, 24 }
+
+    drawCard(270, 242, 240, 248)
+    drawLabel("SESSION", 284, 250, 180)
+    drawLabel("CLASS ID", 284, 272, 120)
+    layout["txtClassID"] = textField("Recording~Class ID")
+    layout["txtClassID"].Position = { 284, 288 }
+    layout["txtClassID"].Size = { 212, 22 }
+    layout["txtClassID"].IsReadOnly = true
+
+    drawLabel("PROFESSOR", 284, 318, 120)
+    layout["txtProfessor"] = textField("Recording~Professor")
+    layout["txtProfessor"].Position = { 284, 334 }
+    layout["txtProfessor"].Size = { 212, 22 }
+    layout["txtProfessor"].IsReadOnly = true
+
+    drawLabel("LECTURE", 284, 364, 120)
+    layout["txtLecture"] = textField("Recording~Lecture")
+    layout["txtLecture"].Position = { 284, 380 }
+    layout["txtLecture"].Size = { 212, 36 }
+    layout["txtLecture"].IsReadOnly = true
+
+    layout["btnConfirm"] = flatButton("Recording~Confirm", "Confirm")
+    layout["btnConfirm"].Position = { 284, 430 }
+    layout["btnConfirm"].Size = { 100, 24 }
+
+    layout["btnCancel"] = flatButton("Recording~Cancel", "Cancel")
+    layout["btnCancel"].Position = { 396, 430 }
+    layout["btnCancel"].Size = { 100, 24 }
+
+    drawCard(10, 500, panelWidth - 20, 146)
+    drawLabel("TRANSPORT", 24, 508, 180)
+
+    layout["btnRecord"] = flatButton("Recording~Record", "Record")
+    layout["btnRecord"].Position = { 24, 530 }
+    layout["btnRecord"].Size = { 230, 26 }
+
+    layout["btnStop"] = flatButton("Recording~Stop", "Stop")
+    layout["btnStop"].Position = { 266, 530 }
+    layout["btnStop"].Size = { 230, 26 }
+
+    drawLabel("ELAPSED", 24, 568, 80, UI.accentSoft, 9)
+    layout["knbElapsed"] = timeDisplay("Recording~Elapsed")
+    layout["knbElapsed"].Position = { 90, 564 }
+    layout["knbElapsed"].Size = { 164, 22 }
+
+    drawLabel("REMAINING", 266, 568, 90, UI.accentSoft, 9)
+    layout["knbRemaining"] = timeDisplay("Recording~Remaining")
+    layout["knbRemaining"].Position = { 356, 564 }
+    layout["knbRemaining"].Size = { 140, 22 }
+
+    drawLabel("SAVING", 24, 594, 180)
+    layout["saveTime"] = textField("Recording~Saving")
+    layout["saveTime"].Position = { 20, 612 }
+    layout["saveTime"].Size = { 480, 22 }
+    layout["saveTime"].IsReadOnly = true
+    layout["saveTime"].TextColor = UI.text
+  end
+
+  return layout, graphics
+end
+
+if Controls then
+  print(PluginInfo.Version)
+
+  pollSeconds = Properties["Poll Seconds"].Value
+  DEBUG = true
+  STX = "\x02"
+  ETX = "\x03"
+
+  sock = TcpSocket.New()
+  pollTime = Timer.New()
+  elapseTimer = Timer.New()
+
+  devicePower = "off"
+  deviceOp = ""
+  classSelected = false
+  pendingPowerOff = false
+  suppressing = false
+  uiState = "off"
+  elapse = 0
+  arrayClassID = {}
+  arrayProfessor = {}
+  arrayClass = {}
+  arrayLectureTitle = {}
+  arrayChoice = {}
+
+  UI_STATES = {
+    off = { query = true, list = true, confirm = true, cancel = true, record = true, stop = true },
+    waiting = { query = false, list = false, confirm = true, cancel = true, record = true, stop = true },
+    selected = { query = false, list = false, confirm = false, cancel = true, record = true, stop = true },
+    ready = { query = true, list = true, confirm = true, cancel = false, record = false, stop = true },
+    recording = { query = true, list = true, confirm = true, cancel = true, record = true, stop = false },
+    saving = { query = true, list = true, confirm = true, cancel = true, record = true, stop = true },
+  }
+
+  function debugPrint(...)
+    if DEBUG then
+      print(...)
+    end
+  end
+
+  function setStatus(msg)
+    Controls.status.String = tostring(msg or "")
+  end
+
+  function frame(cmd, param)
+    if param and param ~= "" then
+      return STX .. cmd .. ";" .. param .. ";" .. ETX
+    end
+    return STX .. cmd .. ";;" .. ETX
+  end
+
+  function padClassId(raw)
+    digits = string.match(tostring(raw or ""), "(%d+)")
+    if not digits then
+      return ""
+    end
+    idNum = tonumber(digits)
+    if not idNum or idNum < 1 or idNum > 999 then
+      return ""
+    end
+    return string.format("%03d", idNum)
+  end
+
+  function splitCsvLine(line)
+    fields = {}
+    field = ""
+    inQuotes = false
+    i = 1
+    while i <= #line do
+      ch = string.sub(line, i, i)
+      if ch == '"' then
+        nxt = string.sub(line, i + 1, i + 1)
+        if inQuotes and nxt == '"' then
+          field = field .. '"'
+          i = i + 1
+        else
+          inQuotes = not inQuotes
+        end
+      elseif ch == "," and not inQuotes then
+        table.insert(fields, field)
+        field = ""
+      else
+        field = field .. ch
+      end
+      i = i + 1
+    end
+    table.insert(fields, field)
+    return fields
+  end
+
+  function trimText(s)
+    s = tostring(s or "")
+    s = string.gsub(s, "^%s+", "")
+    s = string.gsub(s, "%s+$", "")
+    return s
+  end
+
+  function normalizeFrame(raw)
+    text = tostring(raw or "")
+    text = string.gsub(text, STX, "")
+    text = string.gsub(text, ETX, "")
+    text = string.gsub(text, "^\r+", "")
+    text = string.gsub(text, "^\n+", "")
+    text = string.gsub(text, "\r+$", "")
+    text = string.gsub(text, "\n+$", "")
+    return text
+  end
+
+  function parseParamSeconds(text, token)
+    param = string.match(text, token .. ";(%d+)")
+    if not param then
+      return nil
+    end
+    seconds = tonumber(param)
+    if not seconds then
+      return nil
+    end
+    if seconds < 0 then
+      seconds = 0
+    elseif seconds > MAX_RECORD_SECONDS then
+      seconds = MAX_RECORD_SECONDS
+    end
+    return seconds
+  end
+
+  function setRemaining(seconds)
+    Controls.knbRemaining.Value = tonumber(seconds) or 0
+  end
+
+  function setPowerToggle(on)
+    suppressing = true
+    Controls.btnPowerToggle.Boolean = on and true or false
+    suppressing = false
+  end
+
+  function setLeds(op)
+    for idx = 1, 4 do
+      Controls.ledDeviceStatus[idx].Boolean = (LED_STATES[idx] == op)
+    end
+  end
+
+  function setUiState(stateName)
+    flags = UI_STATES[stateName]
+    if not flags then
+      flags = UI_STATES.off
+      stateName = "off"
+    end
+    Controls.btnQuery.IsDisabled = flags.query
+    Controls.listClass.IsDisabled = flags.list
+    Controls.btnConfirm.IsDisabled = flags.confirm
+    Controls.btnCancel.IsDisabled = flags.cancel
+    Controls.btnRecord.IsDisabled = flags.record
+    Controls.btnStop.IsDisabled = flags.stop
+    uiState = stateName
+  end
+
+  function clearSessionFields()
+    Controls.txtClassID.String = ""
+    Controls.txtProfessor.String = ""
+    Controls.txtLecture.String = ""
+    classSelected = false
+  end
+
+  function fnResetList()
+    Controls.listClass.Choices = {}
+    Controls.listClass.String = ""
+    arrayClassID = {}
+    arrayProfessor = {}
+    arrayClass = {}
+    arrayLectureTitle = {}
+    arrayChoice = {}
+    clearSessionFields()
+  end
+
+  function fnElapseTime(running)
+    if running then
+      elapse = 0
+      Controls.knbElapsed.Value = 0
+      elapseTimer:Start(1)
+    else
+      elapseTimer:Stop()
+      elapse = 0
+      Controls.knbElapsed.Value = 0
+    end
+  end
+
+  function applyUiFromDevice()
+    if not sock.IsConnected then
+      setUiState("off")
+      setLeds(nil)
+      setPowerToggle(false)
+      return
+    end
+    if devicePower ~= "on" then
+      setUiState("off")
+      setLeds(nil)
+      setPowerToggle(false)
+      return
+    end
+    setPowerToggle(not pendingPowerOff)
+    if deviceOp == "WTG" then
+      if classSelected then
+        setUiState("selected")
+      else
+        setUiState("waiting")
+      end
+      setLeds("WTG")
+    elseif deviceOp == "RDY" then
+      setUiState("ready")
+      setLeds("RDY")
+    elseif deviceOp == "REC" then
+      setUiState("recording")
+      setLeds("REC")
+    elseif deviceOp == "SAV" then
+      setUiState("saving")
+      setLeds("SAV")
+    else
+      setUiState("waiting")
+      setLeds(nil)
+    end
+  end
+
+  function commandAllowed(cmd, param)
+    if cmd == "QURY" and param == "POW" then
+      return true
+    end
+    if cmd == "POWR" and param == "ONN" then
+      return devicePower ~= "on"
+    end
+    if not sock.IsConnected then
+      return false
+    end
+    if cmd == "POWR" and param == "OFF" then
+      return devicePower == "on"
+    end
+    if devicePower ~= "on" then
+      return false
+    end
+    if cmd == "QURY" and param == "LRS" then
+      return true
+    end
+    if cmd == "QURY" and param == "REC" then
+      return true
+    end
+    if cmd == "QURY" and param == "LST" then
+      return deviceOp == "WTG"
+    end
+    if cmd == "CNFM" then
+      return deviceOp == "WTG"
+    end
+    if cmd == "QURY" and param == "CNF" then
+      return deviceOp == "RDY"
+    end
+    if cmd == "CNCL" then
+      return deviceOp == "RDY"
+    end
+    if cmd == "RECD" then
+      return deviceOp == "RDY"
+    end
+    if cmd == "STOP" then
+      return deviceOp == "REC"
+    end
+    return false
+  end
+
+  function sendCmd(cmd, param)
+    if not sock.IsConnected then
+      setStatus("Not connected")
+      return false
+    end
+    if not commandAllowed(cmd, param) then
+      setStatus("Not available: " .. cmd .. " " .. tostring(param or ""))
+      return false
+    end
+    sock:Write(frame(cmd, param))
+    if not (cmd == "QURY" and (param == "LRS" or param == "POW")) then
+      debugPrint("TX", cmd, param or "")
+    end
+    return true
+  end
+
+  function parseClassList(text)
+    arrayClassID = {}
+    arrayProfessor = {}
+    arrayClass = {}
+    arrayLectureTitle = {}
+    arrayChoice = {}
+    lines = {}
+    for line in string.gmatch(text .. "\n", "(.-)\n") do
+      line = trimText(line)
+      if line ~= "" then
+        table.insert(lines, line)
+      end
+    end
+    startIdx = 1
+    if lines[1] and string.find(lines[1], "ClassID") then
+      startIdx = 2
+    end
+    for i = startIdx, #lines do
+      fields = splitCsvLine(lines[i])
+      classId = padClassId(fields[1])
+      professor = trimText(fields[2])
+      className = trimText(fields[3])
+      lecture = trimText(fields[4])
+      if classId ~= "" then
+        table.insert(arrayClassID, classId)
+        table.insert(arrayProfessor, professor)
+        table.insert(arrayClass, className)
+        table.insert(arrayLectureTitle, lecture)
+        table.insert(arrayChoice, classId .. "  " .. className)
+      end
+    end
+    Controls.listClass.Choices = arrayChoice
+    Controls.listClass.String = ""
+    clearSessionFields()
+    setStatus(string.format("Loaded %d class(es)", #arrayClassID))
+    applyUiFromDevice()
+  end
+
+  function selectClassByChoice(choice)
+    classSelected = false
+    for i, label in ipairs(arrayChoice) do
+      if label == choice then
+        Controls.txtClassID.String = arrayClassID[i]
+        Controls.txtProfessor.String = arrayProfessor[i]
+        Controls.txtLecture.String = arrayLectureTitle[i]
+        classSelected = true
+        break
+      end
+    end
+    if not classSelected then
+      clearSessionFields()
+    end
+    applyUiFromDevice()
+  end
+
+  function setDevicePower(power)
+    if devicePower ~= power then
+      debugPrint("Power", power)
+    end
+    devicePower = power
+    if power ~= "on" then
+      deviceOp = ""
+      pendingPowerOff = false
+      fnElapseTime(false)
+      setRemaining(0)
+      Controls.saveTime.String = ""
+      fnResetList()
+    else
+      if deviceOp == "" then
+        deviceOp = "WTG"
+      end
+    end
+    applyUiFromDevice()
+  end
+
+  function setDeviceOp(op)
+    prev = deviceOp
+    deviceOp = op
+    if op == "REC" then
+      if prev ~= "REC" then
+        fnElapseTime(true)
+        setRemaining(0)
+      end
+    else
+      if prev == "REC" then
+        fnElapseTime(false)
+      end
+      setRemaining(0)
+    end
+    if op ~= "SAV" then
+      Controls.saveTime.String = ""
+    end
+    if op == "WTG" then
+      classSelected = false
+    end
+    if pendingPowerOff and (op == "SAV" or op == "WTG") then
+      pendingPowerOff = false
+      sendCmd("POWR", "OFF")
+    end
+    applyUiFromDevice()
+  end
+
+  function handleFrame(raw)
+    text = normalizeFrame(raw)
+    if text == "" then
+      return
+    end
+    if string.find(text, "NOPE") or string.find(text, "BAD;") or string.find(text, "SRY;") then
+      setStatus("Device rejected command")
+      debugPrint("RX reject", text)
+      return
+    end
+    if string.find(text, "ClassID") or (string.find(text, ",") and not string.match(text, "^Q%u%u%u;")) then
+      parseClassList(text)
+      return
+    end
+    if string.find(text, "GOOD;BYE") then
+      setDevicePower("off")
+      setStatus("Powered off")
+      return
+    end
+    if string.find(text, "QPOW;ONN") then
+      setDevicePower("on")
+      setStatus("Powered on")
+      sendCmd("QURY", "LRS")
+      return
+    end
+    if string.find(text, "QPOW;OFF") then
+      setDevicePower("off")
+      setStatus("Power off")
+      return
+    end
+    rem = parseParamSeconds(text, "QREM")
+    if rem ~= nil then
+      if deviceOp ~= "REC" then
+        setDeviceOp("REC")
+      end
+      setRemaining(rem)
+      return
+    end
+    sav = parseParamSeconds(text, "QSAV")
+    if sav ~= nil then
+      Controls.saveTime.String = string.format("%d seconds remaining", sav)
+      if sav == 0 then
+        setDeviceOp("WTG")
+        setStatus("Save complete")
+      else
+        setDeviceOp("SAV")
+      end
+      return
+    end
+    lrs = string.match(text, "QLRS;(%u%u%u)")
+    if lrs then
+      setDeviceOp(lrs)
+      setStatus("State: " .. lrs)
+      return
+    end
+    cnf = string.match(text, "QCNF;(%d+)")
+    if cnf then
+      Controls.txtClassID.String = padClassId(cnf)
+      setDeviceOp("RDY")
+      setStatus("Confirmed class " .. padClassId(cnf))
+      return
+    end
+    if string.find(text, "QREC;ONN") then
+      setDeviceOp("REC")
+      setStatus("Recording")
+      return
+    end
+    if string.find(text, "QREC;OFF") then
+      if deviceOp == "REC" then
+        setDeviceOp("SAV")
+      end
+      return
+    end
+    debugPrint("RX unhandled", text)
+  end
+
+  function connectSocket()
+    ip = trimText(Controls.txtIPAddress.String)
+    port = math.floor(Controls.knbPort.Value or 0)
+    pollTime:Stop()
+    sock:Disconnect()
+    devicePower = "off"
+    deviceOp = ""
+    fnElapseTime(false)
+    setRemaining(0)
+    Controls.saveTime.String = ""
+    applyUiFromDevice()
+    if ip == "" then
+      setStatus("Enter an IP address")
+      return
+    end
+    if port < 1 or port > 65535 then
+      setStatus("Invalid port")
+      return
+    end
+    setStatus("Connecting " .. ip .. ":" .. tostring(port))
+    sock:Connect(ip, port)
+  end
+
+  function pollDevice()
+    if not sock.IsConnected then
+      return
+    end
+    if devicePower == "on" then
+      sendCmd("QURY", "LRS")
+    else
+      sendCmd("QURY", "POW")
+    end
+  end
+
+  sock.Connected = function()
+    debugPrint("TCP connected")
+    setStatus("Connected")
+    pollTime:Start(pollSeconds)
+    sendCmd("QURY", "POW")
+  end
+
+  sock.Reconnect = function()
+    debugPrint("TCP reconnecting")
+    setStatus("Reconnecting")
+  end
+
+  sock.Data = function()
+    while true do
+      raw = sock:ReadLine(TcpSocket.EOL.Custom, ETX)
+      if raw == nil then
+        break
+      end
+      handleFrame(raw)
+    end
+  end
+
+  sock.Closed = function()
+    debugPrint("TCP closed")
+    pollTime:Stop()
+    fnElapseTime(false)
+    setRemaining(0)
+    devicePower = "off"
+    deviceOp = ""
+    applyUiFromDevice()
+    setStatus("Disconnected")
+  end
+
+  sock.Error = function(sockObj, err)
+    debugPrint("TCP error", err)
+    pollTime:Stop()
+    fnElapseTime(false)
+    setRemaining(0)
+    devicePower = "off"
+    deviceOp = ""
+    applyUiFromDevice()
+    setStatus("Socket error: " .. tostring(err))
+  end
+
+  sock.Timeout = function(sockObj, err)
+    debugPrint("TCP timeout", err)
+    pollTime:Stop()
+    setStatus("Socket timeout")
+  end
+
+  pollTime.EventHandler = function()
+    pollDevice()
+  end
+
+  elapseTimer.EventHandler = function()
+    elapse = elapse + 1
+    if elapse > MAX_RECORD_SECONDS then
+      elapse = MAX_RECORD_SECONDS
+    end
+    Controls.knbElapsed.Value = elapse
+  end
+
+  function requestPowerOff()
+    if deviceOp == "REC" then
+      if sendCmd("STOP") then
+        pendingPowerOff = true
+        setPowerToggle(false)
+        setStatus("Stopping before power off")
+        return true
+      end
+      return false
+    end
+    return sendCmd("POWR", "OFF")
+  end
+
+  function setup()
+    if Controls.txtIPAddress.String == "" then
+      Controls.txtIPAddress.String = Properties["Default IP"].Value
+    end
+    if not Controls.knbPort.Value or Controls.knbPort.Value < 1 then
+      Controls.knbPort.Value = Properties["Default Port"].Value
+    end
+    Controls.knbElapsed.Value = 0
+    setRemaining(0)
+    Controls.saveTime.String = ""
+    fnResetList()
+    applyUiFromDevice()
+    setStatus("Recordinator v" .. PluginInfo.Version)
+
+    Controls.txtIPAddress.EventHandler = function()
+      connectSocket()
+    end
+    Controls.knbPort.EventHandler = function()
+      connectSocket()
+    end
+    Controls.btnPowerToggle.EventHandler = function(ctl)
+      if suppressing then
+        return
+      end
+      if ctl.Boolean then
+        if not sendCmd("POWR", "ONN") then
+          setPowerToggle(devicePower == "on")
+        end
+      else
+        if not requestPowerOff() then
+          setPowerToggle(devicePower == "on")
+        end
+      end
+    end
+    Controls.btnQuery.EventHandler = function()
+      sendCmd("QURY", "LST")
+    end
+    Controls.listClass.EventHandler = function(ctl)
+      selectClassByChoice(ctl.String)
+    end
+    Controls.btnConfirm.EventHandler = function()
+      classId = padClassId(Controls.txtClassID.String)
+      if classId == "" then
+        setStatus("Select a class before confirm")
+        return
+      end
+      sendCmd("CNFM", classId)
+    end
+    Controls.btnCancel.EventHandler = function()
+      sendCmd("CNCL")
+      clearSessionFields()
+    end
+    Controls.btnRecord.EventHandler = function()
+      sendCmd("RECD")
+    end
+    Controls.btnStop.EventHandler = function()
+      sendCmd("STOP")
+    end
+
+    connectSocket()
+  end
+
+  ok, err = pcall(setup)
+  if not ok then
+    print("Recordinator init error:", err)
+    setStatus("Script error: " .. tostring(err))
+  end
+end
